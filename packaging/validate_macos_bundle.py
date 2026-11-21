@@ -28,6 +28,7 @@ STATUS_UNTESTED = "NOT TESTED (headless CI cannot verify)"
 STATUS_UNVERIFIED = "UNVERIFIED"
 STATUS_FAILED = "FAILED"
 STATUS_VERIFIED = "VERIFIED"
+SYSTEM_LIBRARY_PREFIXES = ("/usr/lib/", "/System/Library/")
 
 
 def run(command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -92,24 +93,70 @@ def runtime_dependencies(binary: Path) -> list[str]:
     return dependencies
 
 
-def dependency_exists(dependency: str, binary: Path, bundle: Path) -> bool:
+def is_system_shared_cache_dependency(dependency: str) -> bool:
+    """Return True for OS libraries resolved from the macOS dyld shared cache."""
+    return dependency.startswith(SYSTEM_LIBRARY_PREFIXES)
+
+
+def find_bundled_resource(bundle: Path, relative: str) -> Path | None:
+    """Locate an app resource, including PyInstaller's ``_internal`` layout."""
+    runtime = bundle / "Contents" / "Resources" / "Anixo"
+    relative_path = PurePosixPath(relative)
+    native_relative = Path(*relative_path.parts)
+    for candidate in (
+        runtime / native_relative,
+        runtime / "_internal" / native_relative,
+    ):
+        if candidate.is_file():
+            return candidate
+    for candidate in runtime.rglob(relative_path.name):
+        if candidate.is_file() and candidate.as_posix().endswith(f"/{relative_path.as_posix()}"):
+            return candidate
+    return None
+
+
+def _bundled_filename_exists(
+    relative: str, bundle: Path, bundle_files: dict[str, Path] | None
+) -> bool:
+    name = PurePosixPath(relative).name
+    if bundle_files is not None:
+        return name in bundle_files
+    return any(path.name == name for path in bundle.rglob(name))
+
+
+def dependency_exists(
+    dependency: str,
+    binary: Path,
+    bundle: Path,
+    bundle_files: dict[str, Path] | None = None,
+) -> bool:
     if dependency.startswith("@rpath/"):
         relative = dependency.removeprefix("@rpath/")
-        candidates = (
-            binary.parent / relative,
-            bundle / "Contents" / "Frameworks" / relative,
-            bundle / "Contents" / "Resources" / "Anixo" / relative,
+        bases = (
+            binary.parent,
+            binary.parent / ".dylibs",
+            bundle / "Contents" / "Frameworks",
+            bundle / "Contents" / "Resources" / "Anixo",
+            bundle / "Contents" / "Resources" / "Anixo" / "_internal",
         )
-        return any(candidate.exists() for candidate in candidates)
+        if any((base / relative).exists() for base in bases):
+            return True
+        return _bundled_filename_exists(relative, bundle, bundle_files)
     if dependency.startswith("@loader_path/"):
-        return (binary.parent / dependency.removeprefix("@loader_path/")).exists()
+        relative = dependency.removeprefix("@loader_path/")
+        return (binary.parent / relative).exists() or (
+            binary.parent / ".dylibs" / relative
+        ).exists()
     if dependency.startswith("@executable_path/"):
         relative = dependency.removeprefix("@executable_path/")
         candidates = (
             bundle / "Contents" / "MacOS" / relative,
             bundle / "Contents" / "Resources" / "Anixo" / relative,
+            bundle / "Contents" / "Resources" / "Anixo" / "_internal" / relative,
         )
-        return any(candidate.exists() for candidate in candidates)
+        if any(candidate.exists() for candidate in candidates):
+            return True
+        return _bundled_filename_exists(relative, bundle, bundle_files)
     return Path(dependency).exists()
 
 
@@ -159,13 +206,22 @@ def verify_bundle_structure(bundle: Path, version: str, failures: list[str]) -> 
         bundle / "Contents" / "Resources" / "Anixo" / "Anixo",
         bundle / "Contents" / "Resources" / "ANIXO-Uninstaller",
         bundle / "Contents" / "Resources" / "anixo.icns",
-        bundle / "Contents" / "Resources" / "Anixo" / "styles" / "theme.tcss",
-        bundle / "Contents" / "Resources" / "Anixo" / "assets" / "anixo.png",
-        bundle / "Contents" / "Resources" / "Anixo" / "certifi" / "cacert.pem",
+    )
+    required_resources = (
+        "styles/theme.tcss",
+        "assets/anixo.png",
+        "certifi/cacert.pem",
     )
     for path in required:
         if not path.is_file():
             add_failure(failures, f"Missing bundled file: {path}")
+    resolved_resources: dict[str, str] = {}
+    for relative in required_resources:
+        resource = find_bundled_resource(bundle, relative)
+        if resource is None:
+            add_failure(failures, f"Missing bundled resource: {relative}")
+        else:
+            resolved_resources[relative] = str(resource.relative_to(bundle))
     for path in (
         bundle / "Contents" / "MacOS" / "ANIXO",
         bundle / "Contents" / "Resources" / "Anixo" / "Anixo",
@@ -183,6 +239,7 @@ def verify_bundle_structure(bundle: Path, version: str, failures: list[str]) -> 
     info = verify_info_plist(bundle / "Contents" / "Info.plist", version, failures)
     return {
         "required_files": [str(path.relative_to(bundle)) for path in required],
+        "required_resources": resolved_resources,
         "info_plist": info,
     }
 
@@ -229,8 +286,10 @@ def verify_architectures(
 
 def verify_dynamic_libraries(bundle: Path, uninstaller: Path, failures: list[str]) -> dict[str, Any]:
     binaries = [uninstaller, *all_macho_files(bundle)]
+    bundle_files = {path.name: path for path in bundle.rglob("*") if path.is_file()}
     seen: set[str] = set()
     dependencies_by_binary: dict[str, list[str]] = {}
+    system_dependencies: set[str] = set()
     dependency_count = 0
     for binary in binaries:
         try:
@@ -249,14 +308,21 @@ def verify_dynamic_libraries(bundle: Path, uninstaller: Path, failures: list[str
             if re.match(r"^[A-Za-z]:[\\/]", dependency) or "Program Files" in dependency:
                 add_failure(failures, f"Windows path in dynamic dependencies: {dependency}")
                 continue
-            if dependency.startswith("@") and not dependency_exists(dependency, binary, bundle):
+            if dependency.startswith("@") and not dependency_exists(
+                dependency, binary, bundle, bundle_files
+            ):
                 add_failure(failures, f"Unresolved bundled dynamic library: {dependency}")
                 continue
-            if dependency.startswith("/") and not Path(dependency).exists():
-                add_failure(failures, f"Missing dynamic library: {dependency}")
+            if dependency.startswith("/"):
+                if is_system_shared_cache_dependency(dependency):
+                    system_dependencies.add(dependency)
+                elif not Path(dependency).exists():
+                    add_failure(failures, f"Missing dynamic library: {dependency}")
     return {
         "binaries_checked": len(binaries),
         "dependencies_checked": dependency_count,
+        "system_shared_cache_dependency_count": len(system_dependencies),
+        "system_shared_cache_dependencies": sorted(system_dependencies),
         "locations": dependencies_by_binary,
     }
 
@@ -533,6 +599,11 @@ def main() -> int:
         warnings.append("No Apple signing certificate was configured; code signing was not verified.")
     if not args.require_notarization:
         warnings.append("No Apple notary credentials were configured; notarization was not verified.")
+    if libraries.get("system_shared_cache_dependency_count"):
+        warnings.append(
+            "Dependencies under /usr/lib and /System/Library were accepted as macOS "
+            "dyld shared-cache libraries; their absence from disk is expected on macOS 13+."
+        )
 
     statuses = {
         "Build successful": STATUS_VERIFIED if args.build_passed else STATUS_UNVERIFIED,
