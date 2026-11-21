@@ -1,0 +1,62 @@
+[project]
+name = "anixo"
+version = "0.1.0-beta.1"
+description = "A modern anime discovery and streaming application."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "ANIXO" }]
+keywords = ["anime", "textual", "terminal", "windows", "macos", "streaming"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: End Users/Desktop",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: MacOS :: MacOS X",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Multimedia :: Video",
+  "Topic :: Terminals",
+]
+# Direct runtime dependencies. The transitive packages used by the frozen
+# application are pinned as well so that uv produces a reproducible lock.
+dependencies = [
+  "anyio==4.16.0",
+  "certifi==2026.10.23",
+  "colorama==0.4.6",
+  "h11==0.16.0",
+  "httpcore==1.0.9",
+  "httpx==0.28.1",
+  "idna==3.20",
+  "linkify-it-py==2.2.0",
+  "markdown-it-py==4.3.0",
+  "mdit-py-plugins==0.7.0",
+  "mdurl==0.1.2",
+  "packaging==26.3",
+  "Pillow==13.0.0",
+  "platformdirs==4.14.8",
+  "Pygments==2.21.0",
+  "rich==14.3.4",
+  "textual==8.2.8",
+  "textual-image==0.14.4",
+  "typing_extensions==4.16.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.2.0"]
+
+[dependency-groups]
+# uv installs the default "dev" group, so `uv sync --frozen` provides pytest.
+dev = ["pytest==9.2.0"]
+build = ["pyinstaller==6.22.3"]
+
+[project.urls]
+Homepage = "https://github.com/ANIXO/Anixo"
+
+[tool.uv]
+package = false
+required-version = ">=0.5"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

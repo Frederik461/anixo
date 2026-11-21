@@ -1,0 +1,207 @@
+name: macOS CI
+
+# GitHub-hosted macOS 15 runners: macos-15 is Apple Silicon, macos-15-intel is
+# x86_64. Each architecture is built and tested independently; a failure on one
+# does not hide a failure on the other.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos-build-test:
+    name: macOS ${{ matrix.label }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+            label: ARM64
+          - runner: macos-15-intel
+            arch: x86_64
+            label: Intel
+    env:
+      APP_VERSION: 0.1.0-beta.1
+      TARGET_ARCH: ${{ matrix.arch }}
+      ARCH_LABEL: ${{ matrix.label }}
+      MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.13.9'
+          enable-cache: true
+
+      - name: Prepare log and report directories
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ci-logs "dist/ci/${TARGET_ARCH}"
+
+      - name: Derive version from tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref="${GITHUB_REF_NAME}"
+          if [[ "$ref" =~ ^v[0-9] ]]; then version="${ref#v}"; else version='0.1.0-beta.1'; fi
+          echo "APP_VERSION=$version" >> "$GITHUB_ENV"
+          echo "Building and testing ANIXO v$version for ${ARCH_LABEL} (${TARGET_ARCH})"
+
+      - name: Detect Apple credential availability
+        id: credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          signing=0
+          notarization=0
+          if [[ -n "${MACOS_SIGNING_IDENTITY:-}" ]]; then signing=1; fi
+          if [[ "$signing" == "1" && -n "${APPLE_ID:-}" && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" && -n "${APPLE_TEAM_ID:-}" ]]; then
+            notarization=1
+          fi
+          echo "signing=$signing" >> "$GITHUB_OUTPUT"
+          echo "notarization=$notarization" >> "$GITHUB_OUTPUT"
+          if [[ "$signing" == "0" ]]; then
+            echo "::warning::MACOS_SIGNING_IDENTITY is absent; signing will be reported as UNVERIFIED."
+          fi
+          if [[ "$notarization" == "0" ]]; then
+            echo "::warning::Apple notarization credentials are incomplete; notarization will be reported as UNVERIFIED."
+          fi
+
+      - name: Install dependencies and run complete test suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv sync --locked 2>&1 | tee ci-logs/uv-sync.log
+          uv sync --locked --group build 2>&1 | tee ci-logs/uv-sync-build.log
+          uv run pytest -q 2>&1 | tee ci-logs/pytest-full.log
+          uv run pytest -q tests/test_cross_platform.py tests/test_macos_platform.py 2>&1 | tee ci-logs/pytest-macos.log
+
+      - name: Build standalone app, .app bundle and DMG
+        shell: bash
+        env:
+          ANIXO_SKIP_SYNC_AND_TESTS: '1'
+        run: |
+          set -euo pipefail
+          bash packaging/build_macos.sh "$APP_VERSION" 2>&1 | tee ci-logs/build-macos.log
+
+      - name: Validate packaged application and uninstaller behaviour
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 packaging/validate_macos_runtime.py \
+            --app-binary "dist/release/macos-${TARGET_ARCH}/Anixo/Anixo" \
+            --uninstaller "dist/release/macos-${TARGET_ARCH}/ANIXO-Uninstaller-v${APP_VERSION}-macos-${TARGET_ARCH}" \
+            --version "$APP_VERSION" \
+            --expected-arch "$TARGET_ARCH" \
+            --report "dist/ci/${TARGET_ARCH}/runtime-validation" 2>&1 | tee ci-logs/runtime-validation.log
+
+      - name: Validate bundle, architecture, DMG, signing and status reporting
+        shell: bash
+        env:
+          SIGNING_REQUIRED: ${{ steps.credentials.outputs.signing }}
+          NOTARIZATION_REQUIRED: ${{ steps.credentials.outputs.notarization }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ "$SIGNING_REQUIRED" == "1" ]]; then args+=(--require-signing); fi
+          if [[ "$NOTARIZATION_REQUIRED" == "1" ]]; then args+=(--require-notarization); fi
+          python3 packaging/validate_macos_bundle.py \
+            --bundle "dist/release/macos-${TARGET_ARCH}/ANIXO.app" \
+            --dmg "dist/release/macos-${TARGET_ARCH}/ANIXO-v${APP_VERSION}-macos-${TARGET_ARCH}.dmg" \
+            --uninstaller "dist/release/macos-${TARGET_ARCH}/ANIXO-Uninstaller-v${APP_VERSION}-macos-${TARGET_ARCH}" \
+            --expected-arch "$TARGET_ARCH" \
+            --arch-label "$ARCH_LABEL" \
+            --version "$APP_VERSION" \
+            --report "dist/ci/${TARGET_ARCH}/bundle-validation" \
+            --build-passed --tests-passed "${args[@]}" 2>&1 | tee ci-logs/bundle-validation.log
+
+      - name: Stage architecture-specific artifacts
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="ci-artifacts/${TARGET_ARCH}"
+          reports="ci-reports/${TARGET_ARCH}"
+          release="dist/release/macos-${TARGET_ARCH}"
+          mkdir -p "$stage" "$reports"
+          cp "$release/ANIXO-v${APP_VERSION}-macos-${TARGET_ARCH}.dmg" "$stage/ANIXO-macOS-${ARCH_LABEL}.dmg"
+          cp "$release/ANIXO-Uninstaller-v${APP_VERSION}-macos-${TARGET_ARCH}" "$stage/ANIXO-Uninstaller-macOS-${ARCH_LABEL}"
+          (
+            cd "$stage"
+            shasum -a 256 "ANIXO-macOS-${ARCH_LABEL}.dmg" "ANIXO-Uninstaller-macOS-${ARCH_LABEL}" > "SHA256SUMS-macOS-${ARCH_LABEL}.txt"
+          )
+          cp "dist/ci/${TARGET_ARCH}/"*.json "dist/ci/${TARGET_ARCH}/"*.md "$reports/"
+
+      - name: Write job summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## macOS ${ARCH_LABEL} validation"
+            echo
+            echo "- Runner: \`${{ matrix.runner }}\`"
+            echo "- Target architecture: \`${TARGET_ARCH}\`"
+            echo "- Version: \`${APP_VERSION}\`"
+            for report in "dist/ci/${TARGET_ARCH}/"*.md; do
+              if [[ -f "$report" ]]; then
+                echo
+                cat "$report"
+              fi
+            done
+            echo
+            echo "> Real Finder launch, real Gatekeeper installation, and real playback are **not tested** by this headless CI job."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The following uploads have the default `if: success()` condition. An
+      # Intel DMG/checksum artifact is therefore published only after its own
+      # build, full test suite, runtime checks and bundle checks all pass.
+      - name: Upload macOS ${ARCH_LABEL} DMG and uninstaller
+        uses: actions/upload-artifact@v4
+        with:
+          name: ANIXO-macOS-${{ matrix.label }}.dmg
+          path: |
+            ci-artifacts/${{ matrix.arch }}/ANIXO-macOS-${{ matrix.label }}.dmg
+            ci-artifacts/${{ matrix.arch }}/ANIXO-Uninstaller-macOS-${{ matrix.label }}
+          if-no-files-found: error
+
+      - name: Upload macOS ${ARCH_LABEL} SHA256 checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: macOS-${{ matrix.label }}-SHA256SUMS
+          path: ci-artifacts/${{ matrix.arch }}/SHA256SUMS-macOS-${{ matrix.label }}.txt
+          if-no-files-found: error
+
+      - name: Upload macOS ${ARCH_LABEL} build reports and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macOS-${{ matrix.label }}-build-report
+          path: |
+            ci-reports/${{ matrix.arch }}/**
+            ci-logs/**
+          if-no-files-found: warn

@@ -1,0 +1,1079 @@
+/* ANIXO design system.
+   Colors are supplied by AnixoApp.get_theme_variable_defaults(). */
+
+App {
+    background: $surface;
+    color: $text;
+}
+
+Screen {
+    background: $surface;
+}
+
+#shell {
+    height: 1fr;
+}
+
+#content-pane {
+    width: 1fr;
+    height: 1fr;
+}
+
+#dashboard-content,
+#discover-body,
+#watchlist-body {
+    width: 100%;
+    height: 1fr;
+}
+
+/* ------------------------------------------------------------------ */
+/* Navigation rail                                                     */
+
+NavRail {
+    width: 22;
+    height: 1fr;
+    background: $panel;
+    border-right: solid $line;
+    padding: 1 0 1 1;
+}
+
+.nav-brand {
+    width: 100%;
+    height: 2;
+    padding: 0 1;
+    color: $accent;
+    text-style: bold;
+}
+
+.nav-brand-sub {
+    width: 100%;
+    height: 1;
+    padding: 0 1;
+    color: $muted;
+}
+
+.nav-divider {
+    width: 100%;
+    height: 1;
+    background: $line;
+    margin: 1 1;
+}
+
+.nav-item {
+    width: 100%;
+    min-width: 0;
+    height: 3;
+    margin: 0 1 1 0;
+    padding: 0 1;
+    background: transparent;
+    border: none;
+    color: $muted;
+    text-align: left;
+    text-style: none;
+}
+
+.nav-item:hover {
+    background: $boost;
+    color: $text;
+}
+
+.nav-item.active {
+    background: $boost;
+    color: $text;
+    border-left: wide $accent;
+    text-style: bold;
+}
+
+.nav-hint {
+    width: 100%;
+    height: 1;
+    padding: 0 1;
+    color: $muted;
+}
+
+/* ------------------------------------------------------------------ */
+/* Top bar                                                             */
+
+#topbar {
+    width: 100%;
+    height: 3;
+    background: $subtle;
+    border-bottom: solid $line;
+    padding: 0 2;
+}
+
+.topbar-title {
+    width: auto;
+    color: $text;
+    text-style: bold;
+}
+
+.topbar-rule {
+    width: 1;
+    height: 1;
+    background: $accent;
+    margin: 1 1 0 1;
+}
+
+.topbar-hint {
+    width: 1fr;
+    color: $muted;
+    padding-left: 1;
+}
+
+.topbar-shortcut {
+    width: auto;
+    color: $secondary;
+}
+
+/* ------------------------------------------------------------------ */
+/* Shared controls                                                     */
+
+Button.action-button {
+    height: 3;
+    min-width: 14;
+    padding: 0 2;
+    border: solid $line;
+    background: $panel;
+    color: $text;
+}
+
+Button.action-button:hover {
+    border: solid $accent;
+}
+
+Button.action-button.primary {
+    background: $accent;
+    border: solid $accent;
+    color: $surface;
+    text-style: bold;
+}
+
+Button.action-button.ghost {
+    background: transparent;
+    border: solid $line;
+    color: $muted;
+}
+
+Button.action-button.active {
+    background: $boost;
+    color: $text;
+}
+
+SearchField {
+    width: 100%;
+    height: 3;
+    margin-bottom: 1;
+}
+
+.search-box {
+    width: 100%;
+    height: 3;
+    background: $panel;
+    border: solid $line;
+    padding: 0 1;
+}
+
+.search-box:focus-within {
+    border: solid $accent;
+}
+
+.search-icon {
+    width: 2;
+    color: $accent;
+    content-align: center middle;
+}
+
+Input.search-input {
+    width: 1fr;
+    height: 3;
+    background: transparent;
+    border: none;
+    padding: 0 1;
+    color: $text;
+}
+
+.keycap {
+    width: 3;
+    color: $muted;
+    background: $boost;
+    content-align: center middle;
+}
+
+/* ------------------------------------------------------------------ */
+/* Sections, cards, and metadata                                       */
+
+.section-heading {
+    width: 100%;
+    height: 2;
+}
+
+.section-title {
+    width: auto;
+    color: $text;
+    text-style: bold;
+}
+
+.section-hint {
+    width: 1fr;
+    color: $muted;
+    text-align: right;
+}
+
+.meta-text {
+    color: $muted;
+}
+
+.badge {
+    width: auto;
+    height: 1;
+    padding: 0 1;
+    background: $boost;
+    color: $muted;
+}
+
+.badge.accent {
+    color: $accent;
+}
+
+.badge.score {
+    color: $secondary;
+}
+
+.card-row {
+    height: auto;
+    margin-bottom: 1;
+}
+
+AnimeCard {
+    width: 46;
+    height: auto;
+    background: $panel;
+    border: solid $boost;
+    padding: 0 1;
+}
+
+AnimeCard.selected {
+    background: $boost;
+    border: solid $accent;
+}
+
+AnimeCard > .card-meta {
+    width: 1fr;
+    padding-left: 1;
+}
+
+.card-title {
+    width: 100%;
+    color: $text;
+    text-style: bold;
+}
+
+.card-subtitle,
+.card-episode,
+.card-detail {
+    width: 100%;
+    color: $muted;
+}
+
+.card-episode {
+    color: $secondary;
+}
+
+PosterTile {
+    width: 1fr;
+    height: 17;
+    background: $panel;
+    border: solid $boost;
+    padding: 1;
+}
+
+PosterTile.selected {
+    background: $boost;
+    border: solid $accent;
+}
+
+.tile-poster {
+    width: 100%;
+    height: auto;
+    content-align: center top;
+}
+
+.tile-title {
+    width: 100%;
+    height: 2;
+    padding-top: 1;
+    color: $text;
+    text-style: bold;
+}
+
+.tile-meta {
+    width: 100%;
+    height: 1;
+    color: $muted;
+}
+
+/* ------------------------------------------------------------------ */
+/* Dashboard featured panel                                            */
+
+FeaturedPanel {
+    width: 100%;
+    height: 20;
+    background: $subtle;
+    border-left: wide $accent;
+    padding: 1 2;
+    margin-bottom: 1;
+}
+
+.featured-info {
+    width: 1fr;
+    height: 100%;
+    padding-left: 2;
+}
+
+.featured-copy {
+    width: 100%;
+    height: 1fr;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-size: 1 1;
+}
+
+.featured-kicker {
+    color: $secondary;
+    text-style: bold;
+}
+
+.featured-title {
+    color: $text;
+    text-style: bold;
+    padding-top: 1;
+}
+
+.featured-meta {
+    color: $muted;
+    padding-top: 1;
+}
+
+.featured-description {
+    color: $muted;
+    height: auto;
+    padding-top: 1;
+}
+
+.featured-actions {
+    height: 4;
+    padding-top: 1;
+    scrollbar-size: 0 0;
+}
+
+.featured-actions Button {
+    margin-right: 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Discover and collection grids                                       */
+
+.filter-bar {
+    width: 100%;
+    height: 2;
+    margin-bottom: 1;
+}
+
+.filter-label {
+    width: auto;
+    color: $muted;
+    padding-right: 1;
+}
+
+.filter-chip {
+    width: auto;
+    min-width: 10;
+    height: 2;
+    padding: 0 1;
+    margin-right: 1;
+    background: transparent;
+    border: solid $line;
+    color: $muted;
+}
+
+.filter-chip.active {
+    background: $boost;
+    border: solid $accent;
+    color: $text;
+}
+
+#results-grid,
+#watchlist-grid {
+    width: 100%;
+    height: auto;
+    grid-gutter: 1 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Details                                                             */
+
+#detail-head {
+    height: 18;
+    padding: 1 2;
+    background: $subtle;
+    border-bottom: solid $line;
+}
+
+#detail-summary {
+    width: 1fr;
+    height: 100%;
+    padding-left: 2;
+    padding-right: 1;
+    overflow-y: auto;
+    text-wrap: wrap;
+}
+
+.detail-title {
+    color: $text;
+    text-style: bold;
+}
+
+.detail-alt {
+    color: $muted;
+}
+
+.detail-description {
+    color: $muted;
+    padding: 1 2;
+}
+
+#detail-actions {
+    height: 5;
+    padding: 1 2;
+    scrollbar-size: 0 0;
+}
+
+#detail-actions Button {
+    margin-right: 1;
+}
+
+EpisodeStrip {
+    width: 100%;
+    height: auto;
+    padding: 1 2;
+}
+
+.episode-chip {
+    width: auto;
+    min-width: 6;
+    height: 2;
+    padding: 0 1;
+    margin-right: 1;
+    background: $panel;
+    color: $muted;
+    text-align: center;
+}
+
+.episode-chip.watched {
+    color: $text;
+}
+
+.episode-chip.current {
+    background: $accent;
+    color: $surface;
+    text-style: bold;
+}
+
+/* ------------------------------------------------------------------ */
+/* History                                                             */
+
+#history-list {
+    width: 100%;
+    height: 1fr;
+}
+
+.history-row {
+    width: 100%;
+    height: 2;
+    padding: 0 1;
+    color: $muted;
+}
+
+.history-row.selected {
+    background: $boost;
+    color: $text;
+    border-left: wide $accent;
+}
+
+/* ------------------------------------------------------------------ */
+/* Settings                                                            */
+
+#settings-layout {
+    width: 100%;
+    height: 1fr;
+}
+
+#settings-categories {
+    width: 26;
+    height: 1fr;
+    background: $panel;
+    border-right: solid $line;
+    padding: 1 0;
+}
+
+.settings-category {
+    width: 100%;
+    height: 2;
+    padding: 0 1;
+    color: $muted;
+}
+
+.settings-category.active {
+    background: $boost;
+    color: $text;
+    border-left: wide $accent;
+}
+
+#settings-panel {
+    width: 1fr;
+    height: 1fr;
+    padding: 1 2;
+}
+
+.settings-row {
+    width: 100%;
+    height: 2;
+    padding: 0 1;
+    color: $muted;
+}
+
+.settings-row.selected {
+    background: $boost;
+    color: $text;
+}
+
+#setting-input {
+    height: 3;
+    margin-top: 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Setup and diagnostics                                               */
+
+#setup-panel {
+    width: 100%;
+    height: 1fr;
+    padding: 1 2;
+}
+
+.setup-items {
+    width: 100%;
+    height: 1fr;
+    padding: 1 2;
+    color: $text;
+    background: $surface;
+    border: solid $line;
+}
+
+#setup-actions {
+    width: 100%;
+    height: 3;
+    align: left middle;
+}
+
+#setup-actions Button {
+    margin-right: 1;
+}
+
+#diagnostics-panel {
+    width: 100%;
+    height: 1fr;
+    padding: 1 2;
+}
+
+#diagnostics-scroll {
+    width: 100%;
+    height: 1fr;
+    padding: 1 2;
+    background: $surface;
+    border: solid $line;
+}
+
+.diagnostics-text {
+    color: $text;
+}
+
+/* ------------------------------------------------------------------ */
+/* States and overlays                                                 */
+
+.state-message {
+    width: 100%;
+    height: 3;
+    content-align: center middle;
+    color: $muted;
+}
+
+.state-message.loading {
+    color: $secondary;
+}
+
+ConfirmDialog {
+    align: center middle;
+}
+
+#confirm-body {
+    width: 64;
+    max-width: 90%;
+    height: auto;
+    background: $panel;
+    border: solid $accent;
+    padding: 1 2;
+}
+
+.confirm-title {
+    color: $text;
+    text-style: bold;
+}
+
+.confirm-message {
+    color: $muted;
+}
+
+.confirm-hint {
+    color: $secondary;
+    padding-top: 1;
+}
+
+HelpScreen {
+    align: center middle;
+}
+
+#help-dialog {
+    width: 72;
+    max-width: 90%;
+    height: auto;
+    background: $panel;
+    border: solid $accent;
+    padding: 1 2;
+}
+
+.help-title {
+    color: $text;
+    text-style: bold;
+}
+
+.help-body {
+    color: $muted;
+}
+
+UninstallScreen {
+    align: center middle;
+}
+
+#uninstall-dialog {
+    width: 76;
+    max-width: 92%;
+    height: auto;
+    max-height: 90%;
+    background: $panel;
+    border: solid $accent;
+    padding: 1 2;
+}
+
+.uninstall-title {
+    color: $text;
+    text-style: bold;
+}
+
+.uninstall-message {
+    color: $muted;
+    margin-bottom: 1;
+}
+
+.uninstall-option {
+    width: 100%;
+    height: 2;
+    padding: 0 1;
+    color: $muted;
+    border-left: wide $line;
+}
+
+.uninstall-option.active {
+    color: $text;
+    background: $boost;
+    border-left: wide $accent;
+}
+
+#uninstall-scroll {
+    height: 12;
+    margin: 1 0;
+}
+
+.uninstall-summary {
+    color: $secondary;
+    padding-bottom: 1;
+}
+
+.uninstall-warnings {
+    color: $muted;
+    padding-top: 1;
+}
+
+#uninstall-buttons {
+    height: 3;
+    align: center middle;
+}
+
+#uninstall-buttons Button {
+    margin: 0 1;
+}
+
+Toast {
+    background: $accent-dim;
+    color: $text;
+    border-left: wide $accent;
+}
+
+/* ------------------------------------------------------------------ */
+/* Responsive tiers applied by ShellScreen.on_resize                  */
+
+.compact NavRail {
+    width: 12;
+    padding: 1 0;
+}
+
+.compact .nav-brand,
+.compact .nav-brand-sub,
+.compact .nav-hint {
+    padding: 0;
+}
+
+.compact #topbar {
+    height: 2;
+    padding: 0 1;
+}
+
+.compact #detail-head {
+    height: 12;
+    padding: 0 1;
+}
+
+.compact #detail-summary {
+    padding-left: 1;
+    padding-right: 0;
+}
+
+.compact .topbar-hint,
+.compact .topbar-shortcut {
+    display: none;
+}
+
+.compact FeaturedPanel {
+    height: 16;
+    padding: 0 1;
+}
+
+.compact .featured-description {
+    display: none;
+}
+
+.compact AnimeCard {
+    width: 38;
+}
+
+.compact #settings-categories {
+    width: 20;
+}
+
+.medium NavRail {
+    width: 18;
+}
+
+.wide NavRail {
+    width: 24;
+}
+
+.wide FeaturedPanel {
+    height: 22;
+}
+
+.wide .featured-description {
+    height: auto;
+}
+
+/* ------------------------------------------------------------------ */
+/* Episode browser                                                     */
+
+#episode-body {
+    width: 100%;
+    height: 1fr;
+}
+
+#episode-list-pane {
+    width: 3fr;
+    height: 1fr;
+    padding: 0 1;
+}
+
+#episode-list-scroll {
+    width: 100%;
+    height: 1fr;
+}
+
+#episode-list {
+    width: 100%;
+    height: auto;
+}
+
+.episode-grid {
+    width: 100%;
+    height: auto;
+    grid-gutter: 1 1;
+}
+
+.episode-group {
+    width: 100%;
+    height: 2;
+    padding: 1 1 0 1;
+    color: $secondary;
+    text-style: bold;
+}
+
+.episode-cell {
+    width: 100%;
+    height: 3;
+    padding: 0 1;
+    background: $panel;
+    color: $muted;
+}
+
+.episode-cell.watching {
+    background: $boost;
+    color: $text;
+}
+
+.episode-cell.completed {
+    color: $text;
+}
+
+.episode-cell.selected {
+    background: $accent;
+    color: $surface;
+    text-style: bold;
+}
+
+#episode-info {
+    width: 2fr;
+    height: 1fr;
+    padding: 1 2;
+    background: $subtle;
+    border-left: solid $line;
+}
+
+.episode-info-number {
+    color: $accent;
+    text-style: bold;
+}
+
+.episode-info-title {
+    color: $text;
+    text-style: bold;
+    padding-top: 1;
+}
+
+.episode-info-status {
+    color: $secondary;
+    padding-top: 1;
+}
+
+.episode-info-description {
+    height: auto;
+    padding-top: 1;
+    color: $muted;
+}
+
+#episode-audio-row,
+#episode-info-nav,
+#episode-info-actions,
+#episode-jump-row {
+    height: 3;
+    margin-top: 1;
+}
+
+#episode-audio-row .audio-label {
+    width: 8;
+    content-align: left middle;
+    color: $muted;
+}
+
+#episode-audio-row .audio-option {
+    min-width: 12;
+    margin-right: 1;
+}
+
+#episode-audio-row .audio-option.active {
+    background: $accent;
+    border: solid $accent;
+    color: $surface;
+    text-style: bold;
+}
+
+#episode-info-nav Button,
+#episode-info-actions Button {
+    margin-right: 1;
+}
+
+#episode-jump-input {
+    width: 100%;
+    height: 3;
+}
+
+#episode-shortcuts {
+    padding-top: 1;
+}
+
+#detail-actions {
+    height: 5;
+    padding: 1 2;
+    scrollbar-size: 0 0;
+}
+
+#detail-actions Button {
+    margin-right: 1;
+}
+
+ResumeDialog {
+    align: center middle;
+}
+
+.dialog-actions {
+    height: auto;
+    margin-top: 1;
+}
+
+.dialog-actions Button {
+    margin-right: 1;
+}
+
+.compact #episode-body {
+    layout: vertical;
+}
+
+.compact #episode-list-pane,
+.compact #episode-info {
+    width: 100%;
+}
+
+.compact #episode-info {
+    height: auto;
+    max-height: 70%;
+    min-height: 0;
+    overflow-y: auto;
+    border-left: none;
+    border-top: solid $line;
+}
+
+.compact #episode-info-title,
+.compact .episode-info-status {
+    padding-top: 0;
+}
+
+.compact #episode-audio-row,
+.compact #episode-info-nav,
+.compact #episode-info-actions,
+.compact #episode-jump-row {
+    margin-top: 0;
+}
+
+.compact .episode-info-description {
+    display: none;
+}
+
+.compact #episode-info-actions {
+    height: auto;
+}
+
+.compact #episode-shortcuts {
+    display: none;
+}
+
+/* Franchise / season selection */
+
+#season-body {
+    height: 1fr;
+    layout: horizontal;
+}
+
+#season-list-pane {
+    width: 3fr;
+    padding-right: 1;
+}
+
+#season-info {
+    width: 2fr;
+    border-left: solid $line;
+    padding-left: 2;
+}
+
+#season-list-scroll {
+    height: 1fr;
+}
+
+.season-group {
+    width: 100%;
+    height: 2;
+    color: $secondary;
+    text-style: bold;
+    margin-top: 1;
+}
+
+.franchise-cell {
+    width: 100%;
+    height: 3;
+    padding: 0 1;
+    background: $panel;
+    border: solid $boost;
+    margin-bottom: 1;
+}
+
+.franchise-cell.selected {
+    background: $boost;
+    border: solid $accent;
+    color: $text;
+}
+
+.season-info-title {
+    width: 100%;
+    height: auto;
+    color: $text;
+    text-style: bold;
+}
+
+.season-info-description {
+    width: 100%;
+    height: auto;
+    max-height: 8;
+    color: $muted;
+    margin: 1 0;
+}
+
+#season-choose {
+    width: 100%;
+    margin-top: 1;
+}
+
+#season-shortcuts {
+    margin-top: 1;
+}
+
+.compact #season-body {
+    layout: vertical;
+}
+
+.compact #season-list-pane,
+.compact #season-info {
+    width: 100%;
+    padding: 0;
+    border: none;
+}
+
+.compact .season-info-description,
+.compact #season-shortcuts {
+    display: none;
+}

@@ -1,0 +1,35 @@
+# Python environments and caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Build and release output
+build/
+build-*/
+dist/
+*.exe
+*.dmg
+*.zip
+*.msi
+*.app/
+
+# Local ANIXO state and logs
+uninstall-paths.ini
+install-manifest-*.json
+pending-uninstall.json
+anixo-diagnostic-*.txt
+*.log
+*.tmp
+*.bak
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

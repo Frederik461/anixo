@@ -1,0 +1,291 @@
+name: Release ANIXO
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-build:
+    name: Build Windows x64 release
+    runs-on: windows-latest
+    env:
+      APP_VERSION: 0.1.0-beta.1
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.13.9'
+          enable-cache: true
+
+      - name: Derive version from tag
+        shell: pwsh
+        run: |
+          $ref = '${{ github.ref_name }}'
+          if ($ref -match '^v[0-9]') { $version = $ref.Substring(1) } else { $version = '0.1.0-beta.1' }
+          "APP_VERSION=$version" >> $env:GITHUB_ENV
+          Write-Host "Building ANIXO v$version"
+
+      - name: Verify release version is consistent
+        shell: pwsh
+        run: |
+          $expected = $env:APP_VERSION
+          $source = Get-Content version.py -Raw
+          if ($source -notmatch 'VERSION\s*=\s*"([^"]+)"') { throw 'Cannot read version.py.' }
+          $sourceVersion = $Matches[1]
+          $pyproject = Get-Content pyproject.toml -Raw
+          if ($pyproject -notmatch '(?m)^version\s*=\s*"([^"]+)"') { throw 'Cannot read pyproject.toml.' }
+          $projectVersion = $Matches[1]
+          $iss = Get-Content installer\AnixoSetup.iss -Raw
+          if ($iss -notmatch 'MyAppVersion\s+"([^"]+)"') { throw 'Cannot read the installer version.' }
+          $issVersion = $Matches[1]
+          if ($sourceVersion -ne $expected -or $projectVersion -ne $expected -or $issVersion -ne $expected) {
+            throw "Version mismatch: tag=$expected version.py=$sourceVersion pyproject.toml=$projectVersion installer=$issVersion"
+          }
+          Write-Host "Release version $expected is consistent."
+
+      - name: Sync dependencies and run tests
+        shell: pwsh
+        run: |
+          uv sync --frozen --group build
+          if ($LASTEXITCODE -ne 0) { throw 'uv sync failed.' }
+          uv run pytest -q
+          if ($LASTEXITCODE -ne 0) { throw 'pytest failed.' }
+
+      - name: Build one-folder app and standalone uninstaller
+        shell: pwsh
+        run: |
+          uv run --group build pyinstaller --noconfirm --clean anixo.spec
+          if ($LASTEXITCODE -ne 0) { throw 'One-folder build failed.' }
+          uv run --group build pyinstaller --noconfirm --clean uninstaller.spec
+          if ($LASTEXITCODE -ne 0) { throw 'Uninstaller build failed.' }
+          .\dist\ANIXO-Uninstaller.exe --version
+          if ($LASTEXITCODE -ne 0) { throw 'Uninstaller validation failed.' }
+
+      - name: Build one-file validation app
+        shell: pwsh
+        run: |
+          $root = (Get-Location).Path
+          $cacert = (uv run --group build python -c "import certifi; print(certifi.where())").Trim()
+          uv run --group build pyinstaller --noconfirm --clean --onefile --console --name Anixo `
+            --specpath build-onefile `
+            --icon "$root\assets\anixo.ico" `
+            --distpath "$root\dist\onefile" --workpath "$root\build-onefile" `
+            --runtime-hook "$root\packaging\anixo_runtime_hook.py" `
+            --add-data "$root\styles\theme.tcss;styles" `
+            --add-data "$root\assets\anixo.ico;assets" `
+            --add-data "$cacert;certifi" `
+            --hidden-import textual_image.renderable.halfcell `
+            --hidden-import textual_image.renderable.sixel `
+            --hidden-import textual_image.renderable.tgp `
+            --hidden-import textual_image.renderable.unicode `
+            --hidden-import textual_image.widget.sixel `
+            --collect-submodules textual `
+            --collect-submodules textual_image `
+            --collect-data PIL `
+            "$root\main.py"
+          if ($LASTEXITCODE -ne 0) { throw 'One-file validation build failed.' }
+
+      - name: Install Inno Setup 6
+        shell: pwsh
+        run: |
+          $candidates = @(
+            'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
+            'C:\Program Files\Inno Setup 6\ISCC.exe',
+            (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe')
+          )
+          $iscc = $candidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+          if (-not $iscc) {
+            winget install --id JRSoftware.InnoSetup -e --accept-package-agreements --accept-source-agreements --disable-interactivity
+            $iscc = $candidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+          }
+          if (-not $iscc) { throw 'Inno Setup 6 is required for the release installer.' }
+
+      - name: Validate builds
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File packaging\validate_build.ps1 -Exe dist\Anixo\Anixo.exe -BundleRoot dist\Anixo -Version $env:APP_VERSION -RequireBundleFiles $true
+          if ($LASTEXITCODE -ne 0) { throw 'One-folder validation failed.' }
+          pwsh -NoProfile -File packaging\validate_build.ps1 -Exe dist\onefile\Anixo.exe -BundleRoot dist\onefile -Version $env:APP_VERSION -RequireBundleFiles $false
+          if ($LASTEXITCODE -ne 0) { throw 'One-file validation failed.' }
+
+      - name: Compile installer and portable ZIP
+        shell: pwsh
+        run: |
+          $candidates = @(
+            'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
+            'C:\Program Files\Inno Setup 6\ISCC.exe',
+            (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe')
+          )
+          $iscc = $candidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+          if (-not $iscc) { throw 'Inno Setup 6 compiler not found.' }
+          & $iscc /Qp installer\AnixoSetup.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compilation failed.' }
+          pwsh -NoProfile -File packaging\make_portable.ps1 -Version $env:APP_VERSION
+          if ($LASTEXITCODE -ne 0) { throw 'Portable build failed.' }
+
+      - name: Generate hashes and verify artifacts
+        shell: pwsh
+        run: |
+          Copy-Item -LiteralPath dist\ANIXO-Uninstaller.exe -Destination "dist\release\ANIXO-Uninstaller-v$env:APP_VERSION.exe" -Force
+          pwsh -NoProfile -File packaging\hash.ps1 -ReleaseDir dist\release
+          if ($LASTEXITCODE -ne 0) { throw 'Hash generation failed.' }
+          $required = @(
+            "dist\release\ANIXO-Setup-v$env:APP_VERSION.exe",
+            "dist\release\ANIXO-Uninstaller-v$env:APP_VERSION.exe",
+            "dist\release\ANIXO-Portable-v$env:APP_VERSION.zip",
+            'dist\release\SHA256SUMS.txt'
+          )
+          foreach ($item in $required) {
+            if (-not (Test-Path -LiteralPath $item -PathType Leaf)) { throw "Missing release artifact: $item" }
+            Write-Host "Verified: $item"
+          }
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ANIXO-v${{ env.APP_VERSION }}-windows-x64
+          path: |
+            dist/release/ANIXO-Setup-v${{ env.APP_VERSION }}.exe
+            dist/release/ANIXO-Uninstaller-v${{ env.APP_VERSION }}.exe
+            dist/release/ANIXO-Portable-v${{ env.APP_VERSION }}.zip
+            dist/release/SHA256SUMS.txt
+          if-no-files-found: error
+
+  macos-build:
+    name: Build macOS ${{ matrix.arch }} release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            arch: arm64
+    env:
+      APP_VERSION: 0.1.0-beta.1
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.13.9'
+          enable-cache: true
+
+      - name: Derive version from tag
+        run: |
+          ref="${GITHUB_REF_NAME}"
+          if [[ "$ref" =~ ^v[0-9] ]]; then version="${ref#v}"; else version='0.1.0-beta.1'; fi
+          echo "APP_VERSION=$version" >> "$GITHUB_ENV"
+          echo "Building ANIXO v$version for ${{ matrix.arch }}"
+
+      - name: Build and validate .app and DMG
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash packaging/build_macos.sh "$APP_VERSION"
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ANIXO-v${{ env.APP_VERSION }}-macos-${{ matrix.arch }}
+          path: |
+            dist/release/macos-${{ matrix.arch }}/ANIXO-v${{ env.APP_VERSION }}-macos-${{ matrix.arch }}.dmg
+            dist/release/macos-${{ matrix.arch }}/ANIXO-Uninstaller-v${{ env.APP_VERSION }}-macos-${{ matrix.arch }}
+            dist/release/macos-${{ matrix.arch }}/SHA256SUMS.txt
+          if-no-files-found: error
+
+  publish:
+    name: Publish aggregated release
+    needs: [windows-build, macos-build]
+    runs-on: ubuntu-latest
+    env:
+      APP_VERSION: 0.1.0-beta.1
+
+    steps:
+      - name: Derive version from tag
+        run: |
+          ref="${GITHUB_REF_NAME}"
+          if [[ "$ref" =~ ^v[0-9] ]]; then version="${ref#v}"; else version='0.1.0-beta.1'; fi
+          echo "APP_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ANIXO-v*-*
+          path: dist/release
+
+      - name: Aggregate artifacts and checksums
+        run: |
+          set -euo pipefail
+          find dist/release -mindepth 2 -type f ! -name 'SHA256SUMS.txt' ! -name 'build-report.txt' -exec cp -f {} dist/release/ \;
+          (
+            cd dist/release
+            find . -maxdepth 1 -type f -name 'ANIXO*' -printf '%P\0' | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+          )
+          expected=(
+            "ANIXO-Setup-v${APP_VERSION}.exe"
+            "ANIXO-Uninstaller-v${APP_VERSION}.exe"
+            "ANIXO-Portable-v${APP_VERSION}.zip"
+            "ANIXO-v${APP_VERSION}-macos-arm64.dmg"
+            "ANIXO-Uninstaller-v${APP_VERSION}-macos-arm64"
+            "SHA256SUMS.txt"
+          )
+          for item in "${expected[@]}"; do
+            if [ ! -f "dist/release/$item" ]; then
+              echo "Missing release asset: $item" >&2
+              exit 1
+            fi
+          done
+          if [ "$(wc -l < dist/release/SHA256SUMS.txt)" -ne 5 ]; then
+            echo "Expected five checksummed release assets." >&2
+            exit 1
+          fi
+          cat dist/release/SHA256SUMS.txt
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.APP_VERSION }}
+          name: ANIXO v${{ env.APP_VERSION }}
+          body: |
+            ANIXO v${{ env.APP_VERSION }} — Your anime. Your world.
+
+            Windows x64 setup, portable ZIP, and standalone uninstaller.
+            macOS 13+ Apple Silicon DMG built on a macOS 15 arm64 runner.
+            Intel Mac builds are not published until independently tested.
+            Signing/notarization status is shown in TESTING.md for each build.
+            Verify downloads with the aggregated SHA256SUMS.txt.
+
+            No Python, pip, uv, Git, or Homebrew is needed for the packaged apps.
+          prerelease: ${{ contains(env.APP_VERSION, '-') }}
+          draft: false
+          files: |
+            dist/release/ANIXO-Setup-v${{ env.APP_VERSION }}.exe
+            dist/release/ANIXO-Uninstaller-v${{ env.APP_VERSION }}.exe
+            dist/release/ANIXO-Portable-v${{ env.APP_VERSION }}.zip
+            dist/release/ANIXO-v${{ env.APP_VERSION }}-macos-arm64.dmg
+            dist/release/ANIXO-Uninstaller-v${{ env.APP_VERSION }}-macos-arm64
+            dist/release/SHA256SUMS.txt
