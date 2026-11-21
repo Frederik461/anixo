@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import platform
 from pathlib import Path
+
+import pytest
 
 from config import Config
 from data.database import Database
 from models.anime import Anime, AnimeTitle
-from services.ani_cli import AniCliService, parse_provider_page_title
+from platforms import MACOS, WINDOWS, PlatformAdapter
+import services.ani_cli as ani_cli_module
+from services.ani_cli import AniCliInvocation, AniCliService, parse_provider_page_title
 
 
 def test_parse_ani_cli_history(tmp_path: Path) -> None:
@@ -83,10 +88,22 @@ def test_provider_title_parser_strips_wrapper_and_tagline() -> None:
     )
 
 
-def test_cmd_wrapper_uses_cmd_exe(tmp_path: Path) -> None:
-    wrapper = "C:\\tools\\ani-cli.cmd"
-    config = Config(ani_cli_path=wrapper, ani_cli_cmd_wrapper=True)
-    resolved = Path(wrapper).resolve()
+def test_cmd_wrapper_uses_cmd_exe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Windows command construction is host-independent.
+
+    Platform detection is mocked rather than inferred from the runner OS, and
+    the wrapper is a real file so its resolved path is valid on every host.
+    Nothing here invokes ``cmd.exe``; only the argument list is asserted.
+    """
+    monkeypatch.setattr(
+        ani_cli_module, "get_platform_adapter", lambda: PlatformAdapter(WINDOWS)
+    )
+    wrapper = tmp_path / "ani-cli.cmd"
+    wrapper.write_text("@echo off\r\n", encoding="utf-8")
+    config = Config(ani_cli_path=str(wrapper), ani_cli_cmd_wrapper=True)
+    resolved = wrapper.resolve()
     assert AniCliService(config)._command() == [
         "cmd.exe",
         "/d",
@@ -94,3 +111,52 @@ def test_cmd_wrapper_uses_cmd_exe(tmp_path: Path) -> None:
         "/c",
         f'"{resolved}"',
     ]
+
+
+@pytest.mark.skipif(
+    platform.system() != "Windows",
+    reason="Real Windows path integration runs in the Windows CI job.",
+)
+def test_windows_cmd_wrapper_integration(tmp_path: Path) -> None:
+    """Exercise the unmocked Windows adapter on an actual Windows host."""
+    wrapper = tmp_path / "ani-cli.cmd"
+    wrapper.write_text("@echo off\r\n", encoding="utf-8")
+    service = AniCliService(
+        Config(ani_cli_path=str(wrapper), ani_cli_cmd_wrapper=True)
+    )
+    resolved = wrapper.resolve()
+    assert service._command() == [
+        "cmd.exe",
+        "/d",
+        "/s",
+        "/c",
+        f'"{resolved}"',
+    ]
+    assert service.command_arguments(
+        AniCliInvocation("cmd", "cmd.exe", (), str(resolved)),
+        ["search", "-e", "1"],
+    ) == ["/d", "/s", "/c", f'"{resolved}" "search" "-e" "1"']
+
+
+def test_macos_uses_posix_ani_cli_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """macOS rejects .cmd wrappers and uses its POSIX ani-cli path."""
+    monkeypatch.setattr(
+        ani_cli_module, "get_platform_adapter", lambda: PlatformAdapter(MACOS)
+    )
+    wrapper = tmp_path / "ani-cli.cmd"
+    wrapper.write_text("@echo off\r\n", encoding="utf-8")
+    assert AniCliService(Config(ani_cli_path=str(wrapper))).resolve_invocation() is None
+
+    script = tmp_path / "ani-cli"
+    script.write_text("#!/bin/bash\necho ani-cli\n", encoding="utf-8")
+    script.chmod(0o700)
+    invocation = AniCliService(Config(ani_cli_path=str(script))).resolve_invocation()
+    assert invocation is not None
+    assert invocation.kind in {"bash", "direct"}
+    assert invocation.command != "cmd.exe"
+    assert str(script.resolve()) in (
+        *invocation.base_args,
+        invocation.display_path,
+    )
