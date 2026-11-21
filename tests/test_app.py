@@ -168,6 +168,53 @@ def test_playback_releases_terminal_and_records_history(
     asyncio.run(run())
 
 
+def test_playback_checks_dependencies_after_setup(tmp_path: Path, monkeypatch) -> None:
+    """Completed setup must not crash on the dependency preflight check."""
+    import services.setup as setup_module
+
+    monkeypatch.setattr(
+        setup_module, "_program_version", lambda *args, **kwargs: (True, "test")
+    )
+    history = tmp_path / "empty-ani-hsts"
+    history.write_text("", encoding="utf-8")
+    script = tmp_path / "ani-cli"
+    script.write_text("", encoding="utf-8")
+    config = Config(
+        images="off",
+        artwork_renderer="off",
+        ani_cli_history_path=str(history),
+        ani_cli_path=str(script),
+    )
+    config.setup_completed = True
+    app = AnixoApp(config=config, data_dir=tmp_path / "data")
+
+    class FakeProcess:
+        returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+    async def fake_spawn(**kwargs) -> FakeProcess:
+        return FakeProcess()
+
+    app.suspend = lambda: nullcontext()  # type: ignore[method-assign]
+    app.ani_cli.spawn = fake_spawn  # type: ignore[method-assign]
+    app.ani_cli.import_history = lambda database: 0  # type: ignore[method-assign]
+
+    async def run() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            success = await app.play_anime(
+                Anime(id="99", title=AnimeTitle(romaji="Example Anime")),
+                source_id="source-1",
+                episode="4",
+            )
+            assert success is True
+            assert isinstance(app.screen, DashboardScreen)
+
+    asyncio.run(run())
+
+
 def test_save_config_uses_explicit_config_path(tmp_path: Path) -> None:
     history = tmp_path / "empty-ani-hsts"
     history.write_text("", encoding="utf-8")

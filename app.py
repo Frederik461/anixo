@@ -60,7 +60,7 @@ from services.image_cache import ImageCache
 from services.install_manifest import COMPONENT_APP, ManifestStore
 from services.migration import import_legacy_artwork
 from services.provider import ProviderAnime, ProviderError, ProviderService
-from services.setup import SetupSnapshot, build_snapshot
+from services.setup import SetupSnapshot, build_snapshot, dependency_statuses
 from services.terminal import detect_capabilities, resolve_renderer
 from services.uninstall import (
     UninstallMode,
