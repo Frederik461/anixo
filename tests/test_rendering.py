@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import io
+import os
+from dataclasses import replace
 from pathlib import Path
 
 from PIL import Image
@@ -14,6 +16,7 @@ from config import THEME_PALETTES, Config
 from models.anime import Anime, AnimeTitle
 from screens.dashboard import DashboardScreen
 from screens.render_test import RenderTestScreen
+from services.image_cache import CacheKey
 from services.terminal import TerminalCapabilities
 
 
@@ -30,7 +33,7 @@ _COLORS = {
 }
 
 
-def _app(tmp_path: Path, monkeypatch) -> AnixoApp:
+def _app(tmp_path: Path, monkeypatch, *, cache_max_entries: int = 128) -> AnixoApp:
     async def fake_download(self, url: str) -> bytes | None:  # type: ignore[no-untyped-def]
         return _png(_COLORS.get(url, (160, 160, 160)))
 
@@ -44,6 +47,7 @@ def _app(tmp_path: Path, monkeypatch) -> AnixoApp:
             ani_cli_history_path=str(history),
             terminal_cell_width=10,
             terminal_cell_height=20,
+            extra={"cache_max_entries": cache_max_entries},
         ),
         data_dir=tmp_path / "data",
     )
@@ -101,6 +105,103 @@ def test_halfcell_posters_render_and_survive_rapid_navigation(
             # processed cache entry while still reusing the same download.
             assert app.image_cache.counts()["processed"] == 4
             assert app.artwork.download_count == 3
+
+    asyncio.run(run())
+
+
+def test_mounted_posters_survive_lru_cleanup(tmp_path: Path, monkeypatch) -> None:
+    app = _app(tmp_path, monkeypatch, cache_max_entries=8)
+
+    async def run() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press("down")
+            for _ in range(20):
+                await pilot.pause()
+                if len(list(app.screen.query(".poster-image"))) == 4:
+                    break
+            posters = list(app.screen.query(Poster))
+            active_paths = [
+                poster._result.path for poster in posters if poster._result is not None
+            ]
+            assert len(active_paths) == 4
+            # Make the displayed entries the oldest so cleanup would evict them.
+            for path in active_paths:
+                os.utime(path, (1, 1))
+
+            for index in range(20):
+                key = CacheKey(
+                    f"https://example.test/evict-{index}.jpg",
+                    14,
+                    11,
+                    "halfcell:10x20",
+                )
+                app.image_cache.store_processed(key, Image.new("RGB", (14, 22)))
+
+            assert app.image_cache.cleanup() > 0
+            assert all(path.is_file() for path in active_paths)
+            await pilot.pause()
+            assert len(list(app.screen.query(".poster-image"))) == 4
+
+    asyncio.run(run())
+
+
+def test_missing_cached_poster_falls_back_without_crashing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    app = _app(tmp_path, monkeypatch)
+
+    async def run() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press("down")
+            for _ in range(20):
+                await pilot.pause()
+                if len(list(app.screen.query(".poster-image"))) == 4:
+                    break
+            poster = next(iter(app.screen.query(Poster)))
+            result = poster._result
+            assert result is not None
+            poster._unpin_result()
+
+            requests: list[int] = []
+
+            def fake_request() -> None:
+                requests.append(1)
+
+            monkeypatch.setattr(poster, "_request_image", fake_request)
+            poster._result = replace(result, path=tmp_path / "gone.png")
+            poster.refresh(recompose=True)
+            await pilot.pause()
+
+            assert requests
+            assert poster.query(".poster-placeholder")
+            assert poster.query_one(".poster-image").query(".poster-placeholder")
+
+    asyncio.run(run())
+
+
+def test_stale_generation_result_is_not_applied(tmp_path: Path, monkeypatch) -> None:
+    app = _app(tmp_path, monkeypatch)
+
+    async def run() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press("down")
+            for _ in range(20):
+                await pilot.pause()
+                if len(list(app.screen.query(".poster-image"))) == 4:
+                    break
+            poster = next(iter(app.screen.query(Poster)))
+            result = poster._result
+            assert result is not None
+            requests: list[int] = []
+
+            def fake_request() -> None:
+                requests.append(1)
+
+            monkeypatch.setattr(poster, "_request_image", fake_request)
+            poster._apply_result(poster._token, replace(result, generation=-1))
+
+            assert requests
+            assert poster._result is result
 
     asyncio.run(run())
 

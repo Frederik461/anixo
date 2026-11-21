@@ -59,6 +59,34 @@ def test_cleanup_removes_oldest_processed_entries(tmp_path: Path) -> None:
     assert cache.counts()["processed"] == 8
 
 
+def test_pinned_processed_entries_survive_cleanup(tmp_path: Path) -> None:
+    cache = ImageCache(tmp_path, max_entries=8)
+    paths = [
+        cache.store_processed(
+            CacheKey(f"https://example.test/{index}.jpg", 4, 6, "halfcell"),
+            Image.new("RGB", (4, 12)),
+        )
+        for index in range(12)
+    ]
+
+    cache.pin(paths[0])
+    assert cache.is_pinned(paths[0])
+    assert cache.cleanup() == 3
+    assert paths[0].is_file()
+    assert paths[11].is_file()
+    assert not paths[1].is_file()
+    assert not paths[2].is_file()
+
+    cache.unpin(paths[0])
+    assert not cache.is_pinned(paths[0])
+    cache.store_processed(
+        CacheKey("https://example.test/new.jpg", 4, 6, "halfcell"),
+        Image.new("RGB", (4, 12)),
+    )
+    assert cache.cleanup() == 2
+    assert not paths[0].is_file()
+
+
 def test_clear_removes_all_cache_kinds(tmp_path: Path) -> None:
     cache = ImageCache(tmp_path)
     url = "https://example.test/cover.jpg"

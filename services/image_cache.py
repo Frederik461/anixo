@@ -41,6 +41,7 @@ class ImageCache:
         self.max_entries = max(8, max_entries)
         self.originals.mkdir(parents=True, exist_ok=True)
         self.processed.mkdir(parents=True, exist_ok=True)
+        self._pins: dict[Path, int] = {}
 
     @staticmethod
     def original_digest(url: str) -> str:
@@ -74,6 +75,21 @@ class ImageCache:
         temporary.write_bytes(data)
         temporary.replace(target)
         return target
+
+    def pin(self, path: Path) -> None:
+        """Keep a processed file alive while a widget is displaying it."""
+        self._pins[path] = self._pins.get(path, 0) + 1
+
+    def unpin(self, path: Path) -> None:
+        """Release one display reference to a processed file."""
+        remaining = self._pins.get(path, 0) - 1
+        if remaining > 0:
+            self._pins[path] = remaining
+        else:
+            self._pins.pop(path, None)
+
+    def is_pinned(self, path: Path) -> bool:
+        return path in self._pins
 
     def processed_path(self, key: CacheKey) -> Path:
         return self.processed / f"{self.VERSION}-{key.digest()}.png"
@@ -122,8 +138,9 @@ class ImageCache:
     def cleanup(self) -> int:
         """Remove least-recently-used processed files beyond the configured bound.
 
-        In-progress ``.tmp`` writes are ignored, and disappearing files are
-        tolerated because several poster workers may clean up concurrently.
+        In-progress ``.tmp`` writes and files pinned by mounted posters are
+        ignored. Disappearing files are tolerated because several poster workers
+        may clean up concurrently.
         """
         files: list[tuple[float, Path]] = []
         prefix = f"{self.VERSION}-"
@@ -131,6 +148,8 @@ class ImageCache:
             if path.name.endswith(".tmp"):
                 continue
             if not (path.name.startswith(prefix) and path.name.endswith(".png")):
+                continue
+            if path in self._pins:
                 continue
             try:
                 if path.is_file():

@@ -119,29 +119,58 @@ class Poster(Container, can_focus=False):
         self.styles.max_width = self.width_cells
         self.styles.max_height = self.height_cells
 
+    def _placeholder(self) -> Static:
+        placeholder = Static(self.fallback_letter, classes="poster-placeholder")
+        placeholder.styles.color = self.fallback_color
+        placeholder.styles.width = self.width_cells
+        placeholder.styles.height = self.height_cells
+        return placeholder
+
+    def _image_error_fallback(self, exc: Exception) -> Static:
+        """Replace an unreadable cached image and schedule a fresh load."""
+        self.call_next(self._request_image)
+        return self._placeholder()
+
     def compose(self) -> ComposeResult:
         result = self._result
         widget_class = _WIDGETS.get(self._effective)
         if result and widget_class:
-            image_widget = widget_class(result.path)
+            image_widget = widget_class(
+                result.path, on_error=self._image_error_fallback
+            )
             image_widget.add_class("poster-image")
             image_widget.styles.width = self._render_width or self.width_cells
             image_widget.styles.height = self._render_rows or self.height_cells
             yield image_widget
             return
-        placeholder = Static(self.fallback_letter, classes="poster-placeholder")
-        placeholder.styles.color = self.fallback_color
-        placeholder.styles.width = self.width_cells
-        placeholder.styles.height = self.height_cells
-        yield placeholder
+        yield self._placeholder()
 
     def on_mount(self) -> None:
         # Textual reports ``is_mounted`` as false inside ``on_mount`` in 8.2.x;
         # defer to the next message so the worker actually starts.
         self.call_next(self._request_image)
 
-    def _invalidate(self) -> None:
+    def on_unmount(self) -> None:
+        self._unpin_result()
+
+    def _anixo_app(self) -> AnixoApp | None:
+        try:
+            return cast("AnixoApp", self.app)
+        except Exception:
+            # Unit tests and unmounted widgets have no active Textual app.
+            return None
+
+    def _unpin_result(self) -> None:
+        result = self._result
+        if result is None:
+            return
+        app = self._anixo_app()
+        if app is not None:
+            app.image_cache.unpin(result.path)
         self._result = None
+
+    def _invalidate(self) -> None:
+        self._unpin_result()
         self._render_rows = 0
         self._render_width = 0
         self._token += 1
@@ -214,9 +243,20 @@ class Poster(Container, can_focus=False):
         self._apply_result(message.token, message.result)
 
     def _apply_result(self, token: int, result: ArtworkResult | None) -> None:
-        """Ignore stale results so rapid navigation cannot swap posters."""
+        """Ignore stale results so navigation or cache clears cannot swap art."""
         if token != self._token:
             return
+        app = self._anixo_app()
+        if result is not None and app is not None:
+            if result.generation != app.artwork.generation:
+                self._request_image()
+                return
+            if not result.path.is_file():
+                self._request_image()
+                return
+        self._unpin_result()
+        if result is not None and app is not None:
+            app.image_cache.pin(result.path)
         self._result = result
         self._render_rows = result.cell_rows if result else 0
         self._render_width = result.render_width if result else 0
