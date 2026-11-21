@@ -31,9 +31,9 @@ Open the project's **Releases** page and download the assets for your platform:
 
 A separate macOS CI matrix also uploads `ANIXO-macOS-ARM64.dmg` and
 `ANIXO-macOS-Intel.dmg` build artifacts when their respective jobs pass.
-[Run 44917520313](https://github.com/Frederik461/anixo/actions/runs/44917520313)
+[Run 44919795580](https://github.com/Frederik461/anixo/actions/runs/44919795580)
 passed on both `macos-15` ARM64 and `macos-15-intel`, including full tests
-(197 passed, 1 skipped), architecture, packaging, and runtime/uninstall
+(201 passed, 1 skipped), architecture, packaging, and runtime/uninstall
 validation. Checksums are in the matching `SHA256SUMS-macOS-*.txt` artifacts.
 These are CI artifacts, not public-release assets or clean-machine compatibility
 claims; signing/notarization are UNVERIFIED, and Finder, Gatekeeper, and playback
