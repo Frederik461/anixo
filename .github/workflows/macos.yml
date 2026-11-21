@@ -127,9 +127,11 @@ jobs:
           NOTARIZATION_REQUIRED: ${{ steps.credentials.outputs.notarization }}
         run: |
           set -euo pipefail
-          args=()
-          if [[ "$SIGNING_REQUIRED" == "1" ]]; then args+=(--require-signing); fi
-          if [[ "$NOTARIZATION_REQUIRED" == "1" ]]; then args+=(--require-notarization); fi
+          # macOS ships bash 3.2, where an empty "${args[@]}" is an unbound
+          # variable under set -u. A defined string splits safely when empty.
+          extra_args=""
+          if [[ "$SIGNING_REQUIRED" == "1" ]]; then extra_args="$extra_args --require-signing"; fi
+          if [[ "$NOTARIZATION_REQUIRED" == "1" ]]; then extra_args="$extra_args --require-notarization"; fi
           python3 packaging/validate_macos_bundle.py \
             --bundle "dist/release/macos-${TARGET_ARCH}/ANIXO.app" \
             --dmg "dist/release/macos-${TARGET_ARCH}/ANIXO-v${APP_VERSION}-macos-${TARGET_ARCH}.dmg" \
@@ -138,7 +140,7 @@ jobs:
             --arch-label "$ARCH_LABEL" \
             --version "$APP_VERSION" \
             --report "dist/ci/${TARGET_ARCH}/bundle-validation" \
-            --build-passed --tests-passed "${args[@]}" 2>&1 | tee ci-logs/bundle-validation.log
+            --build-passed --tests-passed $extra_args 2>&1 | tee ci-logs/bundle-validation.log
 
       - name: Stage architecture-specific artifacts
         if: success()
