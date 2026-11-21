@@ -34,6 +34,12 @@ The product name and executable are ANIXO / `Anixo.exe` (Windows) or
 - Persistent, platform-specific installation manifest with safe app-only or complete uninstall
 - Windows per-user installer, portable bundle, standalone uninstaller, and per-architecture macOS CI/DMG pipeline
 
+## Verified status (2026-11-21)
+
+- Windows: full local pipeline passed with **198 tests passed**; silent install/uninstall validation passed.
+- macOS: [CI run 44917520313](https://github.com/Frederik461/anixo/actions/runs/44917520313) passed on both `macos-15` (ARM64) and `macos-15-intel` (Intel): build, **197 passed / 1 skipped** tests, architecture, packaging, and runtime/uninstall validation.
+- Signing and notarization are **UNVERIFIED** because no Apple secrets were configured. Real Finder launch, Gatekeeper installation, and playback are **NOT TESTED** by headless CI. Intel DMGs are CI artifacts only, not public-release assets.
+
 ---
 
 ## Quick start

@@ -20,7 +20,7 @@ been tested. Intel Mac builds are not published until independently tested.
 | Check | Result |
 | --- | --- |
 | `uv lock --check` | PASS — frozen lock resolves. |
-| `python -m pytest -q` | PASS — **192 tests passed** (about 154 s after adding macOS CI platform tests). |
+| `python -m pytest -q` | PASS — **198 passed** on real Windows; **197 passed, 1 skipped** under simulated macOS and on both GitHub-hosted macOS runners (the skip is the Windows-only cmd-wrapper integration test). |
 | `python -m compileall` / `py_compile` over source, services, platforms, screens, tests | PASS — no syntax errors. |
 | `uninstaller.py --version` / `--help` | PASS — standalone CLI starts and lists all options. |
 | `assets/make_icons.py` | PASS — ICO files contain 16/32/48/64/128/256 px frames and `anixo.png` source for `.icns`. |
@@ -84,9 +84,56 @@ Final SHA256 values recorded in `dist\release\SHA256SUMS.txt`:
 d7cc83c3eabca6884e5765ae9ea5f061462abb9c95795c79d8a3485896ed6b32  ANIXO-Uninstaller-v0.1.0-beta.1.exe
 ```
 
-macOS artifacts are **not produced locally on this Windows host**. The arm64
-build script exists and is exercised in CI, but no DMG has been opened or
-installed as part of these local checks.
+macOS artifacts are **not produced locally on this Windows host**. They were
+built on GitHub-hosted macOS runners, downloaded here, and re-hashed, but no DMG
+has been opened or installed as part of these local checks.
+
+## GitHub-hosted macOS CI results
+
+The final `macOS CI` run was
+[44917520313](https://github.com/Frederik461/anixo/actions/runs/44917520313)
+on commit `06b6e5b`. Both jobs completed with `success`:
+
+| Item | macOS ARM64 (`macos-15`) | macOS Intel (`macos-15-intel`) |
+| --- | --- | --- |
+| Full pytest suite | 197 passed, 1 skipped | 197 passed, 1 skipped |
+| Platform tests | 15 passed | 15 passed |
+| Build successful | VERIFIED | VERIFIED |
+| Architecture verified | VERIFIED — 85 Mach-O files, all `arm64`, no extra architectures | VERIFIED — 85 Mach-O files, all `x86_64`, no extra architectures |
+| Packaging verified | VERIFIED | VERIFIED |
+| Runtime/uninstall checks | VERIFIED | VERIFIED |
+| Code signing verified | UNVERIFIED — no Apple certificate secret | UNVERIFIED — no Apple certificate secret |
+| Notarization verified | UNVERIFIED — no notary credentials | UNVERIFIED — no notary credentials |
+| Real Finder launch | NOT TESTED (headless CI) | NOT TESTED (headless CI) |
+| Real Gatekeeper installation | NOT TESTED (headless CI) | NOT TESTED (headless CI) |
+| Real playback | NOT TESTED (headless CI) | NOT TESTED (headless CI) |
+
+Packaging verification covered the `.app` structure, `Info.plist` identifier
+`io.anixo.app`, minimum macOS 13.0, bundled theme/icon/CA resources under
+`Contents/Resources/Anixo/_internal`, 147 dynamic dependencies across 84
+binaries, no Windows-only artifacts, DMG mount/contents, checksums, and the
+standalone uninstaller's `--version`/`--help` checks. Seven absolute OS library
+paths were accepted as macOS dyld shared-cache dependencies; this is expected on
+macOS 13+ and is recorded as a warning, not as a missing bundled library.
+
+Runtime validation on both architectures verified packaged startup/shutdown,
+custom data/cache/log paths, installation ownership, dependency detection,
+app-only uninstall preserving user data, complete uninstall removing personal
+data, outside sentinels surviving, and a pre-existing dependency surviving.
+
+Downloaded CI artifacts were re-hashed locally and matched their staged
+checksum files:
+
+| Artifact | Size | SHA256 |
+| --- | ---: | --- |
+| `ANIXO-macOS-ARM64.dmg` | 32,576,136 | `c2698cfcf5c97b8583f385ea137fe241572be82eb0fe5d6b6d936de4137f5619` |
+| `ANIXO-Uninstaller-macOS-ARM64` | 8,292,560 | `f5fdc04bdbf56f2b6de1549e05552bb52af0692d9a097e67f0ef6d78c12459b7` |
+| `ANIXO-macOS-Intel.dmg` | 34,646,955 | `448eab8fe82059e9bab58fea9272e5c28f2a1e6b0918949e11886721093a7278` |
+| `ANIXO-Uninstaller-macOS-Intel` | 8,823,632 | `a71bf7d1bf5523e8368f7c3aa4c453296daa39043617b78b145d5bedfdc7670a` |
+
+These are CI artifacts, not public-release assets. The Intel DMG remains
+CI-validated only; no public Intel asset is attached and no clean Intel Mac,
+Finder, Gatekeeper, or playback validation has been performed.
 
 ## Release checklist
 
@@ -97,7 +144,7 @@ validated on a user Mac).
 | # | Item | Status | Notes |
 | --- | --- | --- | --- |
 | 1 | Dependency lock is reproducible (`uv lock --check`) | VERIFIED | Frozen lock used by the pipeline. |
-| 2 | Pytest suite passes | VERIFIED | 192 passed. |
+| 2 | Pytest suite passes | VERIFIED | 198 passed locally on Windows; 197 passed, 1 skipped on both macOS CI runners. |
 | 3 | Icons and `.icns` source generated | VERIFIED | ICO frames and `anixo.png` confirmed locally. |
 | 4 | `anixo.spec`, `uninstaller.spec` build | VERIFIED | Windows one-folder and standalone uninstaller built. |
 | 5 | Packaging PowerShell scripts parse and execute | VERIFIED | Full pipeline completed with no `SKIP`/`FAIL`. |
@@ -118,12 +165,12 @@ validated on a user Mac).
 | 18b | In-app handoff preserves custom data/cache/log/config paths | VERIFIED | Pending request records all paths and the standalone CLI restores them when `--execute-pending` is used. |
 | 18c | Uninstall progress and completion report | VERIFIED | Executor callback reports every selected item; CLI prints live progress plus explicit removed/kept/failed/manual sections. |
 | 18d | GitHub Actions release workflow syntax and semantics | VERIFIED | PyYAML parse and actionlint 1.7.12 passed; aggregated checksums use bare filenames and all six published assets are checked. |
-| 18e | macOS CI matrix definition | VERIFIED LOCALLY | `macos.yml` parses as YAML and passes actionlint; separate `macos-15` arm64 and `macos-15-intel` jobs are defined with full tests, build, validators, and failure upload. It has not been executed on GitHub in this workspace. |
+| 18e | macOS CI matrix definition | VERIFIED | `macos.yml` parses as YAML and passes actionlint; run 44917520313 executed both `macos-15` arm64 and `macos-15-intel` jobs successfully with full tests, build, validators, and artifact upload. |
 | 18f | macOS platform-specific tests | VERIFIED | New tests cover macOS adapter paths, app startup/quit, pinned dependency ownership, winget refusal, both uninstall modes, outside sentinels, and pre-existing dependency preservation. |
 | 19 | Portable launcher redirects data to `%LOCALAPPDATA%\ANIXO\Portable` | VERIFIED | Launcher variables verified; live first-run write from packaged ZIP not executed locally. |
 | 20 | Clean Windows 11 x64 machine with no Python/Git/uv, plus playback tools and terminal rendering | UNKNOWN | **Requires a clean VM.** Includes wizard, winget dependency setup, ani-cli/mpv playback and Sixel/half-cell rendering from the packaged build. |
 | 21 | Windows 10 x64 clean install | UNKNOWN | Not run. |
-| 22 | macOS 15 ARM64 and Intel `.app`/DMG CI build | CI-ONLY | Workflow, validators, and separate runner matrix are defined; not executed on GitHub in this workspace and not run on a clean Mac. |
+| 22 | macOS 15 ARM64 and Intel `.app`/DMG CI build | VERIFIED IN CI | Both jobs in run 44917520313 passed build, tests, architecture, packaging, runtime/uninstall validation, and artifact upload. Not run on a clean Mac. |
 | 23 | macOS Finder launch opens a usable terminal session | UNKNOWN | Bundled launcher writes a Terminal.app `open` command but has not been executed. |
 | 24 | macOS Gatekeeper/quarantine, signing and notarization | UNKNOWN | Depends on Apple credentials and a real Mac; unsigned fallback is documented. |
 | 25 | Intel Mac build/runtime | UNKNOWN | CI artifacts are uploaded only after the Intel job passes, but no Intel hardware, Finder, Gatekeeper, or playback validation has been performed; no public release asset is attached. |
@@ -133,11 +180,11 @@ validated on a user Mac).
 | 29 | Season/movie/special selection stays inside ANIXO | VERIFIED | Automated flow test plus live `debug` launcher check. |
 | 30 | Exact provider ID survives selection → episode fetch → playback | VERIFIED | Provider parser rejects other IDs; spawn test asserts `provider_id`, `-S 1`, and `-e <n>`. |
 | 31 | Remembered franchise selection is restored, not Season 1 | VERIFIED | Automated persistence test and selector preselection by exact source ID. |
-| 32 | macOS CI: build successful status | NOT RUN | The workflow reports this only after `build_macos.sh` exits 0 on that runner. |
-| 33 | macOS CI: automated tests successful status | NOT RUN | The workflow reports this only after the full pytest suite and platform-specific tests exit 0. |
-| 34 | macOS CI: architecture verified | NOT RUN | `lipo`/`otool` checks are implemented for ARM64 and x86_64; no CI result exists yet. |
-| 35 | macOS CI: packaging verified | NOT RUN | `.app` structure, `Info.plist`, resources, DMG mount, uninstaller, and checksum checks are implemented; no CI result exists yet. |
-| 36 | macOS CI: code signing / notarization verified | NOT RUN | Conditional on Apple secrets; absent secrets are reported as UNVERIFIED rather than faked. |
+| 32 | macOS CI: build successful status | VERIFIED IN CI | Both jobs in run 44917520313 reported VERIFIED. |
+| 33 | macOS CI: automated tests successful status | VERIFIED IN CI | 197 passed, 1 skipped plus 15 platform tests on each runner. |
+| 34 | macOS CI: architecture verified | VERIFIED IN CI | 85 Mach-O files checked per job; ARM64 all `arm64`, Intel all `x86_64`, with no additional architectures. |
+| 35 | macOS CI: packaging verified | VERIFIED IN CI | `.app` structure, `Info.plist`, resources, dynamic libraries, DMG mount, uninstaller, and checksums passed on both runners. |
+| 36 | macOS CI: code signing / notarization verified | UNVERIFIED | No Apple secrets were configured; both reports say UNVERIFIED rather than faking success. |
 | 37 | macOS CI: Finder / Gatekeeper / real playback | NOT TESTED BY DESIGN | Headless GitHub runners cannot establish these; reports always mark them as not tested. |
 
 ### macOS CI status reporting
@@ -158,8 +205,9 @@ Each generated report distinguishes build, automated tests, architecture,
 packaging, code signing, notarization, Finder launch, Gatekeeper installation,
 and real playback. The last three are always reported as not tested. DMG and
 checksum artifacts are uploaded only from a fully passing job; build reports and
-logs are uploaded even on failure. The workflow definition has been parsed and
-linted locally, but it has not been executed on GitHub in this workspace.
+logs are uploaded even on failure. Run 44917520313 executed the workflow on
+both runners and completed successfully; the generated reports and checksums
+are summarised above.
 
 Additional unknowns: SmartScreen reputation of an unsigned installer; real
 network-dependent playback after upstream ani-cli/AniList changes; and Finder

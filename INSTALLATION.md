@@ -30,9 +30,14 @@ Open the project's **Releases** page and download the assets for your platform:
 | `SHA256SUMS.txt` | All | You want to verify the downloads. |
 
 A separate macOS CI matrix also uploads `ANIXO-macOS-ARM64.dmg` and
-`ANIXO-macOS-Intel.dmg` build artifacts when their respective jobs pass. These
-are CI artifacts, not public-release assets or clean-machine compatibility
-claims.
+`ANIXO-macOS-Intel.dmg` build artifacts when their respective jobs pass.
+[Run 44917520313](https://github.com/Frederik461/anixo/actions/runs/44917520313)
+passed on both `macos-15` ARM64 and `macos-15-intel`, including full tests
+(197 passed, 1 skipped), architecture, packaging, and runtime/uninstall
+validation. Checksums are in the matching `SHA256SUMS-macOS-*.txt` artifacts.
+These are CI artifacts, not public-release assets or clean-machine compatibility
+claims; signing/notarization are UNVERIFIED, and Finder, Gatekeeper, and playback
+are NOT TESTED by headless CI.
 
 A terminal such as Windows Terminal (Windows) or Terminal.app / iTerm2 (macOS)
 is recommended; ANIXO is a text interface.

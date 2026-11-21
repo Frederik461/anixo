@@ -1,8 +1,12 @@
 # ANIXO releases
 
 ANIXO release assets are packaged for **Windows x64** and **macOS 13+ Apple
-Silicon**. A separate macOS CI matrix builds and tests Intel targets, but Intel
-DMGs are not attached to public releases until independently tested.
+Silicon**. A separate macOS CI matrix builds and tests Intel targets:
+[run 44917520313](https://github.com/Frederik461/anixo/actions/runs/44917520313)
+passed on both Apple Silicon and Intel runners, including architecture,
+packaging, and uninstall validation. Intel DMGs are available only as CI
+artifacts and are not attached to public releases until real Intel Mac, Finder,
+Gatekeeper, and playback validation has been performed.
 
 Each release is named **ANIXO v<version>** and tagged `v<version>`. A release
 contains these downloadable assets:
@@ -113,8 +117,10 @@ None of these are needed by end users.
    The `macOS CI` workflow runs the same build on separate `macos-15` and
    `macos-15-intel` runners, validates architecture/resources/dynamic libraries
    and both uninstall modes, and uploads per-architecture reports and checksums.
-   Only a passing job uploads its DMG. This does not replace real Finder,
-   Gatekeeper, clean-machine, or playback testing.
+   Only a passing job uploads its DMG; run 44917520313 passed on both runners.
+   This does not replace real Finder, Gatekeeper, clean-machine, or playback
+   testing, and no Apple signing/notarization secrets were configured in that
+   run.
 
 5. **Review the artifacts** and `build-report.txt`. Confirm the Windows and
    macOS hashes, then follow [TESTING.md](TESTING.md). Do not claim clean-machine
