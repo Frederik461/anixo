@@ -321,7 +321,10 @@ def main() -> int:
             }
             expected = {"Data": str(data), "Cache": str(cache), "Log": str(logs)}
             details["uninstall_paths"] = {"actual": actual, "expected": expected}
-            if actual != expected:
+            # macOS resolves /var to /private/var, so compare canonical paths.
+            if {key: Path(value).resolve() for key, value in actual.items()} != {
+                key: Path(value).resolve() for key, value in expected.items()
+            }:
                 add_failure(failures, f"Recorded uninstall paths do not match overrides: {actual}")
         ownership_status = STATUS_VERIFIED if len(failures) == ownership_start else STATUS_FAILED
 

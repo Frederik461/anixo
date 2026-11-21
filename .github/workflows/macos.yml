@@ -180,7 +180,7 @@ jobs:
       # The following uploads have the default `if: success()` condition. An
       # Intel DMG/checksum artifact is therefore published only after its own
       # build, full test suite, runtime checks and bundle checks all pass.
-      - name: Upload macOS ${ARCH_LABEL} DMG and uninstaller
+      - name: Upload macOS ${{ matrix.label }} DMG and uninstaller
         uses: actions/upload-artifact@v4
         with:
           name: ANIXO-macOS-${{ matrix.label }}.dmg
@@ -189,14 +189,14 @@ jobs:
             ci-artifacts/${{ matrix.arch }}/ANIXO-Uninstaller-macOS-${{ matrix.label }}
           if-no-files-found: error
 
-      - name: Upload macOS ${ARCH_LABEL} SHA256 checksums
+      - name: Upload macOS ${{ matrix.label }} SHA256 checksums
         uses: actions/upload-artifact@v4
         with:
           name: macOS-${{ matrix.label }}-SHA256SUMS
           path: ci-artifacts/${{ matrix.arch }}/SHA256SUMS-macOS-${{ matrix.label }}.txt
           if-no-files-found: error
 
-      - name: Upload macOS ${ARCH_LABEL} build reports and logs
+      - name: Upload macOS ${{ matrix.label }} build reports and logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
