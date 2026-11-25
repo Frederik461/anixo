@@ -390,6 +390,37 @@ def test_release_repo_is_derived_from_remote_not_update_repo(tmp_path: Path) -> 
     assert results["GitHub CLI authentication"].status == rm.PASSED
 
 
+def test_stale_local_packaging_does_not_block_release(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    release_dir = root / "dist" / "release"
+    release_dir.mkdir(parents=True)
+    (release_dir / "SHA256SUMS.txt").write_text(
+        "\n".join(
+            f"{_digest()}  {name}" for name in rm.expected_checksum_names(NEXT_BETA)
+        ),
+        encoding="utf-8",
+    )
+    manager = _manager(root, FakeRunner(root))
+    results, _ = manager.preflight(CURRENT, NEXT_BETA)
+
+    assert not manager._failures(results)
+    assert results["Packaging artifacts"].status == rm.NOT_TESTED
+
+
+def test_current_local_packaging_is_reported_as_checked(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    release_dir = root / "dist" / "release"
+    release_dir.mkdir(parents=True)
+    (release_dir / "SHA256SUMS.txt").write_text(
+        "\n".join(f"{_digest()}  {name}" for name in rm.expected_checksum_names(CURRENT)),
+        encoding="utf-8",
+    )
+    manager = _manager(root, FakeRunner(root))
+    results, _ = manager.preflight(CURRENT, NEXT_BETA)
+
+    assert results["Packaging artifacts"].status == rm.PASSED
+
+
 # ---------------------------------------------------------------------------
 # Publishing workflow
 

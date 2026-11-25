@@ -932,8 +932,16 @@ def test_update_screen_buttons_are_mouse_and_keyboard_accessible(tmp_path: Path)
                 "#update-notes-button",
             ):
                 assert screen.query_one(selector) is not None
-            assert screen.query_one("#update-cancel").disabled is True
-            assert screen.query_one("#update-restart").disabled is True
+            cancel = screen.query_one("#update-cancel")
+            restart = screen.query_one("#update-restart")
+            # Initial action state is applied by an async mount callback.  A
+            # single pause is not enough under a loaded full-suite run.
+            for _ in range(20):
+                if cancel.disabled and restart.disabled:
+                    break
+                await pilot.pause()
+            assert cancel.disabled is True
+            assert restart.disabled is True
             await pilot.click("#update-check")
             await pilot.pause()
 
