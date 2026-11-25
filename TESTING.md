@@ -20,7 +20,7 @@ been tested. Intel Mac builds are not published until independently tested.
 | Check | Result |
 | --- | --- |
 | `uv lock --check` | PASS — frozen lock resolves. |
-| `python -m pytest -q` | PASS — **282 passed** on real Windows on 2026-11-25 after the updater and settings-action fixes; **280 passed** on both GitHub-hosted macOS runners during the successful `v0.1.0-beta.5` release workflow. Earlier macOS checks were `202 passed, 1 skipped` (Windows-only cmd-wrapper test). |
+| `python -m pytest -q` | PASS — **282 passed** on real Windows on 2026-11-25 after the updater and settings-action fixes; **282 passed** on both GitHub-hosted macOS runners during the successful `v0.1.0-beta.5` release workflow. Earlier macOS checks were `202 passed, 1 skipped` (Windows-only cmd-wrapper test). |
 | `python -m compileall` / `py_compile` over source, services, platforms, screens, tests | PASS — no syntax errors. |
 | `uninstaller.py --version` / `--help` | PASS — standalone CLI starts and lists all options. |
 | `assets/make_icons.py` | PASS — ICO files contain 16/32/48/64/128/256 px frames and `anixo.png` source for `.icns`. |
@@ -73,7 +73,7 @@ been tested. Intel Mac builds are not published until independently tested.
 | --- | --- |
 | `pytest -q tests/test_release_manager.py` | PASS — 22 passed. |
 | `pytest -q tests/test_cli.py tests/test_release_manager.py` | PASS — 30 passed; existing CLI parsing/install/version tests unchanged. |
-| `pytest -q` | PASS — **280 passed in 250.94s** on Windows 11, Python 3.12.10 after the episode-loading fix. |
+| `pytest -q` | PASS — **282 passed in 260.46s** on Windows 11, Python 3.12.10 after the updater and settings-action fixes. |
 | `compileall -q main.py config.py version.py services updater_helper.py screens packaging/make_release_manifest.py` | PASS — no syntax errors. |
 | Git/gh/HTTP isolation | PASS — injected runner, confirmer, fetcher, head fetcher, clock, and sleep fakes; no token value is printed. |
 | Release repository resolution with maintainer config | PASS — with `update_repo=fred8/anixo`, the manager resolved `origin` → `frederik461/anixo` and `gh` authentication passed. |
@@ -84,7 +84,7 @@ been tested. Intel Mac builds are not published until independently tested.
 | Local packaging preflight | FIXED — stale/partial `dist/release/SHA256SUMS.txt` is now `NOT TESTED`, not a mandatory failure; CI rebuilds and verifies the published assets from the new tag. |
 | Update-screen initial button state flake | FIXED — `test_update_screen_buttons_are_mouse_and_keyboard_accessible` now waits for the async mount state instead of asserting after one `pilot.pause()`. |
 | Existing Textual timing flake | FIXED — `test_watch_without_history_opens_selector` now waits for the exclusive watch worker's screen state instead of relying on one `pilot.pause()` under full-suite load. |
-| Real GitHub tag, workflow run, and published release | PASS — the manager pushed `v0.1.0-beta.5`, found run `45679602164`, and all four jobs succeeded (Windows x64, macOS arm64, macOS x86_64, aggregated publish). Verification passed for release metadata, 12 assets, HTTPS asset URLs, manifest schema/channel/7 pinned assets, 10 checksum entries, and agreement between GitHub, the manifest, and `SHA256SUMS.txt`. The configured beta updater also found beta.4 with 12 assets. Real-terminal install/update behaviour remains a manual test. |
+| Real GitHub tag, workflow run, and published release | PASS — the manager pushed `v0.1.0-beta.5`, found run `45688160080`, and all four jobs succeeded (Windows x64, macOS arm64, macOS x86_64, aggregated publish). Verification passed for release metadata, 12 assets, HTTPS asset URLs, manifest schema/channel/7 pinned assets, 10 checksum entries, and agreement between GitHub, the manifest, and `SHA256SUMS.txt`. A later live check was rate-limited by GitHub, so cached/feed fallback behaviour remains `NOT TESTED`. |
 
 ## Episode-loading fix (2026-11-25)
 
@@ -95,7 +95,7 @@ been tested. Intel Mac builds are not published until independently tested.
 | Details → Select Episode | FIXED — Select Episode now resolves provider results and the exact season before opening the browser, and skips the resume prompt. Provider episode rows remain authoritative over AniList's planned count. |
 | Provider lookup failures | FIXED — failures are shown in the episode list instead of being silently converted to an empty page. The list shows a visible loading state, an actionable error message, and an `R` retry path; direct numeric playback still works. |
 | Automated coverage | PASS — new tests cover stale-to-finished metadata, resolved provider browsing without a resume prompt, provider failure messaging, and retry recovery. |
-| macOS compatibility of this fix | PASS — the `v0.1.0-beta.5` tagged workflow ran the same 280-test suite on both GitHub-hosted macOS runners and all build/publish jobs succeeded. |
+| macOS compatibility of this fix | PASS — the `v0.1.0-beta.5` tagged workflow ran the same 282-test suite on both GitHub-hosted macOS runners and all build/publish jobs succeeded. |
 
 ## In-app updater fix (2026-11-25)
 
@@ -108,7 +108,8 @@ been tested. Intel Mac builds are not published until independently tested.
 | Preflight rendering test | FIXED — the render-test caption assertion now waits for `PosterLoaded` text instead of assuming image widgets and captions update in the same frame. The test passed five consecutive isolated runs. |
 | Reproduced failure | PASS — replaying the cached public release through the old validation produced the exact `x86 does not match x86_64` error; after the fix the same release prepared successfully with a verified plan and helper path. |
 | Automated coverage | PASS — `pytest -q tests/test_updates.py tests/test_app.py tests/test_rendering.py` → **54 passed**; full suite → **282 passed in 260.46s**. New tests cover a 32-bit Inno Setup launcher, strict helper architecture checking, HTTP 403 messaging, and the awaitable update action. |
-| Installed beta.3 self-update | BLOCKED until a new build is installed manually — the validation bug lives in the already installed client, so a release published afterward cannot repair that client through its own update button. Future in-app updates work from the fixed build onward. |
+| Installed beta.3 self-update | REPAIRED locally — the broken beta.3 client could not fix itself, so the verified beta.5 installer was applied silently over `C:\ANIXO` (checksum `40866a31b0bf4cf1b7289fbbc057bc0d85428645341894d5a3aff2285bb91a3d`, exit code 0). `Anixo.exe --version` and the install manifest now report the fixed version; user config, update repo/channel, and all seven franchise selections were preserved. |
+| Next in-app update after repair | NOT TESTED — no newer release exists yet, and the live unauthenticated GitHub check was rate-limited at verification time. The corrected action and installer validation are covered by source tests; the real update button can be exercised when the rate limit clears and a newer release is published. |
 
 ## Episode-release, mouse, and performance work (2026-11-24)
 
