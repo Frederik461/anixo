@@ -65,6 +65,7 @@ from services.migration import import_legacy_artwork
 from services.provider import ProviderAnime, ProviderError, ProviderService
 from services.setup import SetupSnapshot, build_snapshot, dependency_statuses
 from services.terminal import detect_capabilities, resolve_renderer
+from services.update_log import redact_update_text
 from services.uninstall import (
     UninstallMode,
     UninstallPlanner,
@@ -814,7 +815,7 @@ class AnixoApp(App[None]):
     # Shared actions / services
 
     def notify_user(self, message: str, *, timeout: float = 3) -> None:
-        self.notify(message, timeout=timeout)
+        self.notify(redact_update_text(str(message)), timeout=timeout)
 
     async def confirm(self, title: str, message: str = "") -> bool:
         """Show a confirmation modal. Call this from a Textual worker.
@@ -1245,10 +1246,12 @@ class AnixoApp(App[None]):
         busy: bool | None = None,
     ) -> None:
         state = self.update_state
+        status = redact_update_text(status)
+        progress = redact_update_text(progress)
+        error = redact_update_text(error)
         state.status = status
         state.error = error
-        if progress:
-            state.progress = progress
+        state.progress = progress
         if busy is not None:
             state.busy = busy
         self._update_status = status
@@ -1286,10 +1289,12 @@ class AnixoApp(App[None]):
         state.release = check.release
         state.notes = check.release.notes if check.release else ""
         if check.update_available:
-            state.status = f"UPDATE AVAILABLE — ANIXO {check.available}"
+            state.status = redact_update_text(
+                f"UPDATE AVAILABLE — ANIXO {check.available}"
+            )
             self.notify_user(state.status)
         else:
-            state.status = check.message or "UP TO DATE"
+            state.status = redact_update_text(check.message or "UP TO DATE")
 
     async def action_check_updates(self) -> None:
         """Explicitly check for a compatible release."""
@@ -1304,7 +1309,7 @@ class AnixoApp(App[None]):
         state.channel = check.channel
         state.release = check.release
         state.notes = check.release.notes if check.release else ""
-        state.error = check.error
+        state.error = redact_update_text(check.error)
         state.busy = False
         if check.error:
             self._set_update_status(f"UPDATE FAILED — {check.error}", error=check.error)
@@ -1327,66 +1332,77 @@ class AnixoApp(App[None]):
 
     async def _update_anixo_flow(self) -> None:
         state = self.update_state
-        if state.prepared is None:
-            check = await self.updates.check(self.config.update_channel)
-            if not check.update_available or not check.release:
-                self._set_update_status(check.message or "No update is available.")
-                return
-            notes = " ".join(check.release.notes.split())[:280] or "No release notes."
-            approved = await self.confirm(
-                f"Update ANIXO to {check.available}?",
-                f"Installed: {check.current}\nChannel: {check.channel}\n\n{notes}\n\n"
-                "The update is downloaded to staging, checksum-verified, and "
-                "installed by a separate helper after ANIXO closes. "
-                "Your settings, history, watchlist and dependencies are preserved.",
-            )
-            if not approved:
-                self._set_update_status("Update cancelled before download.")
-                return
-            state.release = check.release
-            state.notes = check.release.notes
-            cancel = asyncio.Event()
-            self._update_cancel = cancel
-            state.can_cancel = True
-            self._set_update_status("DOWNLOADING — downloading and verifying…", busy=True)
-            try:
-                prepared = await self.updates.prepare_update(
-                    check.release,
-                    progress=self._update_progress,
-                    should_cancel=cancel.is_set,
+        cancel: asyncio.Event | None = None
+        exiting_for_restart = False
+        try:
+            if state.prepared is None:
+                check = await self.updates.check(self.config.update_channel)
+                if not check.update_available or not check.release:
+                    self._set_update_status(check.message or "No update is available.")
+                    return
+                notes = " ".join(check.release.notes.split())[:280] or "No release notes."
+                approved = await self.confirm(
+                    f"Update ANIXO to {check.available}?",
+                    f"Installed: {check.current}\nChannel: {check.channel}\n\n{notes}\n\n"
+                    "The update is downloaded to staging, checksum-verified, and "
+                    "installed by a separate helper after ANIXO closes. "
+                    "Your settings, history, watchlist and dependencies are preserved.",
                 )
-            except asyncio.CancelledError:
-                self._set_update_status("UPDATE FAILED — download cancelled.", busy=False)
+                if not approved:
+                    self._set_update_status("Update cancelled before download.")
+                    return
+                state.release = check.release
+                state.notes = check.release.notes
+                cancel = asyncio.Event()
+                self._update_cancel = cancel
+                state.can_cancel = True
+                self._set_update_status(
+                    "DOWNLOADING — downloading and verifying…", busy=True
+                )
+                try:
+                    prepared = await self.updates.prepare_update(
+                        check.release,
+                        progress=self._update_progress,
+                        should_cancel=cancel.is_set,
+                    )
+                except asyncio.CancelledError:
+                    self._set_update_status("UPDATE FAILED — download cancelled.", busy=False)
+                    return
+                except Exception as error:
+                    status = f"UPDATE FAILED — {error}"
+                    self.updates.log.log("prepare_failed", error=str(error))
+                    self._set_update_status(status, error=str(error), busy=False)
+                    self.notify_user(status, timeout=10)
+                    return
+                state.prepared = prepared
+                state.verification = prepared.verification
                 state.can_cancel = False
-                return
-            except Exception as error:
-                status = f"UPDATE FAILED — {error}"
-                self.updates.log.log("prepare_failed", error=str(error))
-                self._set_update_status(status, error=str(error), busy=False)
-                self.notify_user(status, timeout=10)
-                state.can_cancel = False
-                return
-            state.prepared = prepared
-            state.verification = prepared.verification
-            state.can_cancel = False
-            self._set_update_status(
-                f"READY TO INSTALL — ANIXO {prepared.version} passed verification.",
-                progress="Restart is required to complete installation.",
-                busy=False,
+                self._set_update_status(
+                    f"READY TO INSTALL — ANIXO {prepared.version} passed verification.",
+                    progress="Restart is required to complete installation.",
+                    busy=False,
+                )
+            restart = await self.confirm(
+                "Restart and install now?",
+                "ANIXO will close and a separate updater helper will install the "
+                "verified package, check it, then reopen ANIXO. The previous "
+                "installation is restored automatically if anything fails.",
             )
-        restart = await self.confirm(
-            "Restart and install now?",
-            "ANIXO will close and a separate updater helper will install the "
-            "verified package, check it, then reopen ANIXO. The previous "
-            "installation is restored automatically if anything fails.",
-        )
-        if restart:
-            self.action_restart_update()
+            if restart:
+                exiting_for_restart = True
+                self.action_restart_update()
+        finally:
+            if cancel is not None and self._update_cancel is cancel:
+                self._update_cancel = None
+            state.can_cancel = False
+            if not exiting_for_restart:
+                state.busy = False
 
     def action_cancel_update(self) -> None:
         if self._update_cancel is not None:
             self._update_cancel.set()
-        self._set_update_status("Cancelling update…", busy=False)
+        # Keep the flow busy until the worker has actually stopped.
+        self._set_update_status("Cancelling update…", busy=True)
         self.update_state.can_cancel = False
 
     def action_restart_update(self) -> None:
@@ -1416,8 +1432,34 @@ class AnixoApp(App[None]):
             payload = json.loads(marker.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return
-        if not payload.get("ok") or str(payload.get("version")) != VERSION:
+        log_path = str(
+            getattr(self.updates.log, "path", self.data_dir / "updates" / "update.log")
+        )
+        if not payload.get("ok"):
+            detail = redact_update_text(
+                str(
+                    payload.get("detail")
+                    or payload.get("message")
+                    or "Unknown update failure."
+                )
+            )
+            status = (
+                "UPDATE FAILED — the previous update was rolled back. "
+                f"{detail} See {log_path}"
+            )
+            self._set_update_status(
+                status,
+                error=detail,
+                progress="Open Updates to try again.",
+                busy=False,
+            )
+            self.update_state.restart_required = False
+            self.notify_user(status, timeout=10)
+            # Keep the marker so the failure remains visible after another restart.
             return
+        if str(payload.get("version")) != VERSION:
+            return
+        self.update_state.restart_required = False
         self.notify_user(payload.get("message") or f"ANIXO {VERSION} is ready.")
         try:
             marker.unlink()

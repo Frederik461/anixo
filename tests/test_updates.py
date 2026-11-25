@@ -165,7 +165,7 @@ class _FakeAsyncClient:
     async def __aexit__(self, *args: Any) -> bool:
         return False
 
-    def stream(self, method: str, url: str) -> _FakeStream:
+    def stream(self, method: str, url: str, **kwargs: Any) -> _FakeStream:
         return _FakeStream(self.body)
 
 
@@ -190,7 +190,7 @@ class _FakeJsonClient:
     async def __aexit__(self, *args: Any) -> bool:
         return False
 
-    async def get(self, url: str) -> _FakeJsonResponse:
+    async def get(self, url: str, **kwargs: Any) -> _FakeJsonResponse:
         return self.response
 
 

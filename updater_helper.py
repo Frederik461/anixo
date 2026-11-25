@@ -26,7 +26,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from services.update_log import UpdateLog
+from services.update_log import UpdateLog, redact_update_text
 from services.updater import validate_package
 
 PRESERVE_NAMES = {
@@ -195,15 +195,81 @@ def _notarization_status(app: Path) -> str:
     )
 
 
+def _path(value: Any) -> Path:
+    """Return an absolute path without resolving links or changing case."""
+    text = os.path.expandvars(os.path.expanduser(str(value or "")))
+    return Path(os.path.normpath(os.path.abspath(text)))
+
+
+def _lexical_path(value: Any) -> Path:
+    """Case-normalized path used only for containment comparisons."""
+    return Path(os.path.normcase(str(_path(value))))
+
+
+def _is_reparse(path: Path) -> bool:
+    """Return true for symlinks, junctions, and Windows reparse points."""
+    try:
+        if path.is_symlink():
+            return True
+    except OSError:
+        return True
+    if os.name == "nt":
+        try:
+            attributes = ctypes.windll.kernel32.GetFileAttributesW(str(path))
+            if attributes != -1 and attributes & 0x400:  # FILE_ATTRIBUTE_REPARSE_POINT
+                return True
+        except (AttributeError, OSError):
+            pass
+    return False
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    candidate = str(_lexical_path(path))
+    parent = str(_lexical_path(root))
+    if candidate == parent:
+        return False
+    try:
+        return os.path.commonpath([candidate, parent]) == parent
+    except ValueError:
+        return False
+
+
+def _validate_install_root(plan: dict[str, Any]) -> Path:
+    """Refuse install roots that are ambiguous or overlap user data."""
+    raw = plan.get("install_dir")
+    if not raw:
+        raise UpdateHelperError("Update plan has no install directory.")
+    root = _path(raw)
+    if not root.is_absolute() or root.name in {"", ".", ".."}:
+        raise UpdateHelperError("Update plan has an unsafe install directory.")
+    guarded = {
+        _lexical_path(plan.get(key))
+        for key in ("data_dir", "cache_dir", "log_dir", "config_path")
+        if plan.get(key)
+    }
+    for path in guarded:
+        if path and (_is_within(root, path) or _is_within(path, root)):
+            raise UpdateHelperError("Install directory overlaps user data or configuration.")
+    if _lexical_path(root) == _lexical_path(Path.home()):
+        raise UpdateHelperError("Install directory is the user home directory.")
+    if root.exists():
+        if _is_reparse(root) or not root.is_dir():
+            raise UpdateHelperError("Install directory is a link or is not a directory.")
+    executable = _path(plan.get("executable"))
+    if not executable or not _is_within(executable, root):
+        raise UpdateHelperError("Configured executable is outside the install directory.")
+    return root
+
+
 def _ignored(source: Path, plan: dict[str, Any]) -> set[Path]:
     ignored: set[Path] = set()
     for key in ("data_dir", "cache_dir", "log_dir"):
         value = plan.get(key)
         if value:
-            ignored.add(Path(value).resolve())
+            ignored.add(_lexical_path(value))
     config = plan.get("config_path")
     if config:
-        ignored.add(Path(config).resolve())
+        ignored.add(_lexical_path(config))
     return ignored
 
 
@@ -216,17 +282,17 @@ def _copy_preserving(
 ) -> None:
     ignored = ignored or set()
     skip_names = skip_names or set()
-    source = source.resolve()
-    if source in ignored:
+    source_path = _lexical_path(source)
+    if source_path in ignored or _is_reparse(source_path):
         return
+    if not source_path.exists():
+        return
+    destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if source.is_symlink():
-        destination.symlink_to(os.readlink(source))
-        return
-    if source.is_dir():
+    if source_path.is_dir():
         destination.mkdir(parents=True, exist_ok=True)
-        for child in source.iterdir():
-            if child.resolve() in ignored:
+        for child in source_path.iterdir():
+            if _lexical_path(child) in ignored:
                 continue
             _copy_preserving(
                 child,
@@ -235,32 +301,141 @@ def _copy_preserving(
                 skip_names=skip_names,
             )
         return
-    if source.name in skip_names:
+    protected = {name.lower() for name in skip_names}
+    if source_path.name.lower() in protected:
         return
-    shutil.copy2(source, destination, follow_symlinks=False)
+    shutil.copy2(source_path, destination, follow_symlinks=False)
+
+
+def _snapshot_tree(root: Path, ignored: set[Path]) -> tuple[set[str], set[str]]:
+    """Return lexical relative file and directory sets, never traversing links."""
+    files: set[str] = set()
+    directories: set[str] = set()
+    if not root.exists():
+        return files, directories
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        try:
+            entries = list(os.scandir(current))
+        except OSError as error:
+            raise UpdateHelperError("Could not inspect the installation directory.") from error
+        for entry in entries:
+            path = Path(entry.path)
+            lexical = _lexical_path(path)
+            if not _is_within(lexical, root):
+                raise UpdateHelperError("Installation contains a path outside its root.")
+            if _is_reparse(path):
+                continue
+            if lexical in ignored or any(_is_within(lexical, item) for item in ignored):
+                continue
+            relative = os.path.normcase(
+                os.path.relpath(str(lexical), str(_lexical_path(root)))
+            )
+            try:
+                is_directory = entry.is_dir(follow_symlinks=False)
+            except OSError:
+                continue
+            if is_directory:
+                directories.add(relative)
+                stack.append(path)
+            elif entry.is_file(follow_symlinks=False):
+                files.add(relative)
+    return files, directories
 
 
 def _backup(plan: dict[str, Any], stamp: str) -> Path:
-    root = Path(plan["backup_dir"])
+    root = _path(plan["backup_dir"])
     backup = root / f"{stamp}-{plan['version']}"
-    install = Path(plan["install_dir"])
+    install = _path(plan["install_dir"])
     if install.exists():
         _copy_preserving(
             install,
             backup / "installation",
             ignored=_ignored(install, plan),
         )
+    backup.mkdir(parents=True, exist_ok=True)
     (backup / "plan.json").write_text(json.dumps(plan, indent=2), encoding="utf-8")
     return backup
 
 
-def _restore(plan: dict[str, Any], backup: Path) -> None:
-    """Overlay the pre-update installation without deleting user data."""
-    install = Path(plan["install_dir"])
+def _relative_path(root: Path, relative: str) -> Path:
+    return root.joinpath(*Path(relative.replace("\\", "/")).parts)
+
+
+def _remove_new_managed_files(
+    plan: dict[str, Any],
+    root: Path,
+    before_files: set[str],
+    before_directories: set[str],
+    log: UpdateLog,
+) -> list[str]:
+    """Delete only verified new app files; user data and existing files stay."""
+    ignored = _ignored(root, plan)
+    current_files, current_directories = _snapshot_tree(root, ignored)
+    new_files = sorted(current_files - before_files)
+    to_delete: list[tuple[str, Path]] = []
+    for relative in new_files:
+        candidate = _relative_path(root, relative)
+        if not _is_within(candidate, root) or _is_reparse(candidate):
+            continue
+        if Path(relative).name.lower() in {name.lower() for name in PRESERVE_NAMES}:
+            continue
+        to_delete.append((relative, candidate))
+    log.log(
+        "rollback_delete_list",
+        files=",".join(relative for relative, _ in to_delete),
+        count=len(to_delete),
+    )
+    failures: list[str] = []
+    for relative, candidate in to_delete:
+        try:
+            candidate.unlink()
+        except OSError as error:
+            failures.append(f"{relative}: {error}")
+    new_directories = sorted(
+        current_directories - before_directories,
+        key=lambda item: len(Path(item.replace("\\", "/")).parts),
+        reverse=True,
+    )
+    removable_directories: list[tuple[str, Path]] = []
+    for relative in new_directories:
+        candidate = _relative_path(root, relative)
+        if _is_within(candidate, root) and not _is_reparse(candidate):
+            removable_directories.append((relative, candidate))
+    log.log(
+        "rollback_directory_delete_list",
+        directories=",".join(relative for relative, _ in removable_directories),
+        count=len(removable_directories),
+    )
+    for relative, candidate in removable_directories:
+        try:
+            candidate.rmdir()
+        except OSError:
+            pass  # Non-empty directories contain preserved user data.
+    return failures
+
+
+def _restore(
+    plan: dict[str, Any],
+    backup: Path,
+    before_files: set[str],
+    before_directories: set[str],
+    log: UpdateLog,
+) -> list[str]:
+    """Restore the backup after removing only files introduced by the failed update.
+
+    Rollback cannot undo installer side effects outside the install directory,
+    such as registry entries or Start Menu shortcuts created by an installer.
+    """
+    root = _validate_install_root(plan)
+    failures = _remove_new_managed_files(
+        plan, root, before_files, before_directories, log
+    )
     source = backup / "installation"
-    if not source.exists():
-        return
-    _copy_preserving(source, install)
+    if source.exists():
+        _copy_preserving(source, root, ignored=_ignored(root, plan))
+    return failures
 
 
 def _health_check(plan: dict[str, Any]) -> str:
@@ -344,14 +519,65 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _process_start_epoch(pid: int) -> float | None:
+    """Best-effort process start time, used to detect PID reuse."""
+    if pid <= 0:
+        return None
+    if os.name == "nt":
+        try:
+            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+            if not handle:
+                return None
+            try:
+                creation = ctypes.c_longlong()
+                exit_time = ctypes.c_longlong()
+                kernel_time = ctypes.c_longlong()
+                user_time = ctypes.c_longlong()
+                ok = ctypes.windll.kernel32.GetProcessTimes(
+                    handle,
+                    ctypes.byref(creation),
+                    ctypes.byref(exit_time),
+                    ctypes.byref(kernel_time),
+                    ctypes.byref(user_time),
+                )
+                if not ok:
+                    return None
+                # FILETIME counts 100ns intervals since 1601-01-01 UTC.
+                return 11644473600.0 + (creation.value / 10_000_000.0)
+            finally:
+                ctypes.windll.kernel32.CloseHandle(handle)
+        except (AttributeError, OSError):
+            return None
+    try:
+        return float(os.stat(f"/proc/{pid}").st_ctime)
+    except (OSError, ValueError):
+        return None
+
+
 def _wait_for_parent(plan: dict[str, Any], timeout: float = 30.0) -> None:
-    """Wait briefly for the app that launched this helper to exit cleanly."""
+    """Wait for the launching app; fail closed if it is still alive."""
     try:
         pid = int(plan.get("parent_pid") or 0)
     except (TypeError, ValueError):
         pid = 0
+    try:
+        expected_start = float(plan.get("parent_started_epoch") or 0)
+    except (TypeError, ValueError):
+        expected_start = 0.0
     deadline = time.monotonic() + timeout
-    while _pid_alive(pid) and time.monotonic() < deadline:
+    while _pid_alive(pid):
+        if expected_start > 0:
+            actual_start = _process_start_epoch(pid)
+            if actual_start is not None and abs(actual_start - expected_start) > 2.0:
+                raise UpdateHelperError(
+                    "The parent process PID was reused; refusing to replace files."
+                )
+        if time.monotonic() >= deadline:
+            platform = "Windows" if os.name == "nt" else "this platform"
+            raise UpdateHelperError(
+                f"Parent ANIXO process {pid} is still running after "
+                f"{timeout:g}s; refusing to replace files on {platform}."
+            )
         time.sleep(0.25)
 
 
@@ -361,18 +587,30 @@ def apply_plan(plan_path: Path) -> dict[str, Any]:
     log = UpdateLog(plan["data_dir"])
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     backup: Path | None = None
+    before_files: set[str] | None = None
+    before_directories: set[str] | None = None
     staging = Path(plan["data_dir"]) / "updates" / "helper-staging" / stamp
     result: dict[str, Any] = {
         "ok": False,
         "version": plan["version"],
         "restarted": False,
+        "restored": False,
         "backup": "",
         "message": "",
         "detail": "",
     }
     try:
+        install = _validate_install_root(plan)
+        ignored = _ignored(install, plan)
         _wait_for_parent(plan)
         log.log("helper_started", version=plan["version"], platform=plan["platform"])
+        before_files, before_directories = _snapshot_tree(install, ignored)
+        log.log(
+            "install_snapshot",
+            files=len(before_files),
+            directories=len(before_directories),
+            install=str(install),
+        )
         package = Path(plan["package_path"]).resolve()
         if not package.is_file():
             raise UpdateHelperError("Staged update package is missing.")
@@ -387,7 +625,6 @@ def apply_plan(plan_path: Path) -> dict[str, Any]:
         backup = _backup(plan, stamp)
         result["backup"] = str(backup)
         staging.mkdir(parents=True, exist_ok=True)
-        install = Path(plan["install_dir"])
         if plan["platform"] == "windows" and str(plan["asset_name"]).lower().endswith(".exe"):
             args = [
                 str(package),
@@ -412,7 +649,7 @@ def apply_plan(plan_path: Path) -> dict[str, Any]:
                 _copy_preserving(
                     extracted,
                     install,
-                    ignored=_ignored(install, plan),
+                    ignored=ignored,
                     skip_names=PRESERVE_NAMES,
                 )
             else:
@@ -427,7 +664,7 @@ def apply_plan(plan_path: Path) -> dict[str, Any]:
                 existing = install / "ANIXO.app"
                 if existing.exists():
                     shutil.rmtree(existing)
-                _copy_preserving(app, existing, ignored=_ignored(install, plan))
+                _copy_preserving(app, existing, ignored=ignored)
                 if mount is not None:
                     subprocess.run(
                         ["hdiutil", "detach", str(mount)],
@@ -448,15 +685,33 @@ def apply_plan(plan_path: Path) -> dict[str, Any]:
         )
         shutil.rmtree(staging, ignore_errors=True)
     except (UpdateHelperError, OSError, ValueError, subprocess.SubprocessError) as error:
-        result["detail"] = f"{type(error).__name__}: {error}"[:500]
-        result["message"] = "Update failed; the previous installation was restored."
-        if backup is not None:
+        detail = redact_update_text(f"{type(error).__name__}: {error}")[:500]
+        result["detail"] = detail
+        if backup is not None and before_files is not None and before_directories is not None:
             try:
-                _restore(plan, backup)
-            except OSError as restore_error:
+                failures = _restore(
+                    plan, backup, before_files, before_directories, log
+                )
+                result["restored"] = True
+                result["message"] = "Update failed; the previous installation was restored."
+                if failures:
+                    result["message"] = "Update failed; rollback needs attention."
+                    result["detail"] = (
+                        f"{detail} Rollback: " + "; ".join(failures)
+                    )[:500]
+            except (OSError, UpdateHelperError, ValueError) as restore_error:
                 result["message"] = "Update failed and rollback needs attention."
-                result["detail"] += f" Rollback: {restore_error}"[:500]
-        log.log("helper_failed", version=plan["version"], error=result["detail"])
+                result["detail"] = (
+                    f"{detail} Rollback: {restore_error}"
+                )[:500]
+        else:
+            result["message"] = "Update failed before any files were changed."
+        log.log(
+            "helper_failed",
+            version=plan["version"],
+            error=result["detail"],
+            restored=result["restored"],
+        )
     _write_result(plan, result)
     return result
 

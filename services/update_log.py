@@ -15,10 +15,22 @@ from pathlib import Path
 from typing import Any
 
 _REDACTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._\-]+"), r"\1<redacted>"),
-    (re.compile(r"(?i)\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]+"), "<redacted>"),
-    (re.compile(r"(?i)([?&](?:token|access_token|key|api_key|password)=)[^&\s]+"), r"\1<redacted>"),
-    (re.compile(r"(https?://)[^/@\s]+@"), r"\1<redacted>@"),
+    (re.compile(r"(?i)\b(bearer\s+)\S+"), r"\1<redacted>"),
+    (
+        re.compile(
+            r"(?i)\b(?:gh[pousr]_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+)\b"
+        ),
+        "<redacted>",
+    ),
+    (
+        re.compile(
+            r"(?i)([?&](?:sig|se|expires?|expiration|x-amz-[a-z0-9_-]+|"
+            r"token|access[_-]?token|refresh[_-]?token|api[_-]?key|apikey|key|"
+            r"password|passwd|pwd|secret|signature)=)[^&\s]+"
+        ),
+        r"\1<redacted>",
+    ),
+    (re.compile(r"(?i)(https?://)[^/@\s]+@"), r"\1<redacted>@"),
 )
 
 

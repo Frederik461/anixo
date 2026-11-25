@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -28,8 +29,8 @@ import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable
-from urllib.parse import urlparse
+from typing import Any, Callable, Iterator
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -39,7 +40,7 @@ from services.install_manifest import (
     COMPONENT_APP,
     ManifestStore,
 )
-from services.update_log import UpdateLog
+from services.update_log import UpdateLog, redact_update_text
 from version import APP_NAME, APP_VERSION, DEFAULT_UPDATE_CHANNEL
 
 DEFAULT_REPO = "Frederik461/anixo"
@@ -47,8 +48,9 @@ USER_AGENT = f"ANIXO/{APP_VERSION}"
 _RELEASES_URL = "https://api.github.com/repos/{repo}/releases"
 _LATEST_URL = "https://api.github.com/repos/{repo}/releases/latest"
 _CACHE_TTL_SECONDS = 6 * 60 * 60
-_TRUSTED_HOSTS = {"api.github.com", "github.com", "objects.githubusercontent.com"}
-_GITHUB_HOST_SUFFIXES = (".githubusercontent.com",)
+_MAX_REDIRECTS = 5
+_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+_SAFE_REDIRECT_HEADERS = {"user-agent", "accept", "accept-encoding"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +78,7 @@ class ReleaseManifest:
     assets: tuple[ReleaseAsset, ...]
     signature: str = ""
     signature_key_id: str = ""
+    channel_explicit: bool = True
 
     def asset_named(self, name: str) -> ReleaseAsset | None:
         return next((item for item in self.assets if item.name == name), None)
@@ -246,30 +249,160 @@ def _timestamp() -> str:
 
 
 def _safe_error(error: BaseException) -> str:
-    return f"{type(error).__name__}: {error}"[:400]
+    return f"{type(error).__name__}: {redact_update_text(error)}"[:400]
+
+
+def _has_userinfo(parsed: Any) -> bool:
+    return bool(parsed.username or parsed.password or "@" in (parsed.netloc or ""))
 
 
 def _is_https(url: str) -> bool:
     parsed = urlparse(str(url or ""))
-    return parsed.scheme == "https" and bool(parsed.netloc)
+    return (
+        parsed.scheme.lower() == "https"
+        and bool(parsed.netloc)
+        and not _has_userinfo(parsed)
+    )
 
 
 def _host_of(url: str) -> str:
-    return (urlparse(str(url or "")).hostname or "").lower()
+    return str(urlparse(str(url or "")).hostname or "").lower()
+
+
+def _normalize_trusted_host(value: str) -> str:
+    return str(value or "").strip().lower()
 
 
 def _host_allowed(url: str, trusted_hosts: set[str]) -> bool:
-    host = _host_of(url)
-    if not _is_https(url) or not host:
+    parsed = urlparse(str(url or ""))
+    if not _is_https(url):
         return False
-    if host in trusted_hosts or host in _TRUSTED_HOSTS:
-        return True
-    return any(host.endswith(suffix) for suffix in _GITHUB_HOST_SUFFIXES)
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    # An explicit non-default port changes the endpoint even when the host
+    # name is trusted, so it is refused rather than normalized away.
+    if port is not None and port != 443:
+        return False
+    host = _host_of(url)
+    if not host:
+        return False
+    for trusted in trusted_hosts:
+        value = _normalize_trusted_host(trusted)
+        if not value:
+            continue
+        if host == value or (value.startswith(".") and host.endswith(value)):
+            return True
+        if not value.startswith(".") and host.endswith(f".{value}"):
+            return True
+    return False
 
 
 def is_trusted_asset_url(url: str, trusted_hosts: set[str] | None = None) -> bool:
-    """Public wrapper for the updater's HTTPS host allowlist."""
-    return _host_allowed(url, set(trusted_hosts or ()))
+    """Public wrapper for the config-driven HTTPS host allowlist."""
+    hosts = set(trusted_hosts) if trusted_hosts is not None else set(
+        Config().update_trusted_hosts
+    )
+    return _host_allowed(url, hosts)
+
+
+def _redirect_headers(
+    headers: dict[str, str], previous_url: str, next_url: str
+) -> dict[str, str]:
+    """Keep only non-credential headers when a redirect changes host."""
+    if _host_of(previous_url) == _host_of(next_url):
+        return dict(headers)
+    return {
+        key: value
+        for key, value in headers.items()
+        if key.lower() in _SAFE_REDIRECT_HEADERS
+    }
+
+
+def _redirect_location(response: Any) -> str:
+    headers = getattr(response, "headers", None) or {}
+    value = headers.get("location") or headers.get("Location") or ""
+    return str(value or "").strip()
+
+
+def _checked_redirect_target(current: str, location: str, trusted_hosts: set[str]) -> str:
+    target = urljoin(current, location)
+    if not _host_allowed(target, trusted_hosts):
+        raise ValueError("Update URL redirected outside the trusted HTTPS source.")
+    return target
+
+
+async def _fetch_response(
+    url: str,
+    *,
+    headers: dict[str, str],
+    trusted_hosts: set[str],
+    timeout: float = 15.0,
+) -> Any:
+    """GET a URL, validating every redirect hop and the final URL."""
+    current = str(url or "")
+    request_headers = dict(headers)
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=False,
+        headers=request_headers,
+    ) as client:
+        for hop in range(_MAX_REDIRECTS + 1):
+            if not _host_allowed(current, trusted_hosts):
+                raise ValueError("Update URL is outside the trusted HTTPS source.")
+            response = await client.get(current, headers=request_headers)
+            location = _redirect_location(response)
+            if location and getattr(response, "status_code", 0) in _REDIRECT_STATUSES:
+                if hop >= _MAX_REDIRECTS:
+                    raise ValueError("Update URL exceeded the redirect limit.")
+                target = _checked_redirect_target(current, location, trusted_hosts)
+                request_headers = _redirect_headers(request_headers, current, target)
+                current = target
+                continue
+            final_url = str(getattr(response, "url", current) or current)
+            if not _host_allowed(final_url, trusted_hosts):
+                raise ValueError("Update URL redirected outside the trusted HTTPS source.")
+            return response
+    raise ValueError("Update URL exceeded the redirect limit.")
+
+
+@contextlib.asynccontextmanager
+async def _stream_response(
+    url: str,
+    *,
+    headers: dict[str, str],
+    trusted_hosts: set[str],
+    timeout: float = 120.0,
+) -> Iterator[Any]:
+    """Stream a URL after validating every redirect hop and the final URL."""
+    current = str(url or "")
+    request_headers = dict(headers)
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=False,
+        headers=request_headers,
+    ) as client:
+        for hop in range(_MAX_REDIRECTS + 1):
+            if not _host_allowed(current, trusted_hosts):
+                raise ValueError("Update URL is outside the trusted HTTPS source.")
+            async with client.stream("GET", current, headers=request_headers) as response:
+                location = _redirect_location(response)
+                if location and getattr(response, "status_code", 0) in _REDIRECT_STATUSES:
+                    if hop >= _MAX_REDIRECTS:
+                        raise ValueError("Update URL exceeded the redirect limit.")
+                    target = _checked_redirect_target(current, location, trusted_hosts)
+                    request_headers = _redirect_headers(request_headers, current, target)
+                    current = target
+                    continue
+                final_url = str(getattr(response, "url", current) or current)
+                if not _host_allowed(final_url, trusted_hosts):
+                    raise ValueError(
+                        "Update URL redirected outside the trusted HTTPS source."
+                    )
+                yield response
+                return
+    raise ValueError("Update URL exceeded the redirect limit.")
 
 
 def _asset_tokens(asset: ReleaseAsset) -> tuple[str, str, str, str]:
@@ -377,10 +510,22 @@ def select_helper_asset(release: ReleaseInfo, target: PlatformTarget) -> Release
     return None
 
 
-def parse_manifest(data: Any, source_url: str = "") -> ReleaseManifest:
+def parse_manifest(
+    data: Any,
+    source_url: str = "",
+    trusted_hosts: set[str] | None = None,
+) -> ReleaseManifest:
     """Parse and validate a machine-readable release manifest."""
     if not isinstance(data, dict):
         raise ValueError("Release manifest must be a JSON object.")
+    allowed_hosts: set[str] | None
+    if trusted_hosts is not None or source_url:
+        allowed_hosts = set(trusted_hosts or Config().update_trusted_hosts)
+        if source_url and _is_https(source_url):
+            allowed_hosts.add(_host_of(source_url))
+    else:
+        # Legacy callers that supply no source keep the previous behavior.
+        allowed_hosts = None
     schema = int(data.get("schema_version", 0))
     if schema != 1:
         raise ValueError(f"Unsupported release manifest schema {schema}.")
@@ -398,7 +543,7 @@ def parse_manifest(data: Any, source_url: str = "") -> ReleaseManifest:
         url = str(item.get("url") or "").strip()
         if not name or not url:
             raise ValueError(f"Release asset {name or '<unnamed>'} has no name or URL.")
-        if source_url and not _host_allowed(url, {_host_of(source_url)}):
+        if allowed_hosts is not None and not _host_allowed(url, allowed_hosts):
             raise ValueError(f"Release asset {name} is hosted outside the trusted feed.")
         digest = str(item.get("sha256") or item.get("digest") or "").strip()
         if digest.lower().startswith("sha256:"):
@@ -418,15 +563,17 @@ def parse_manifest(data: Any, source_url: str = "") -> ReleaseManifest:
         )
     if not assets:
         raise ValueError("Release manifest has no usable assets.")
+    raw_channel = str(data.get("channel") or "").strip()
     return ReleaseManifest(
         schema_version=schema,
         version=version.lstrip("v"),
-        channel=normalize_channel(str(data.get("channel") or "")),
+        channel=normalize_channel(raw_channel),
         published_at=str(data.get("published_at") or ""),
         notes=str(data.get("notes") or data.get("body") or ""),
         assets=tuple(assets),
         signature=str(data.get("signature") or ""),
         signature_key_id=str(data.get("signature_key_id") or ""),
+        channel_explicit=bool(raw_channel),
     )
 
 
@@ -582,8 +729,9 @@ class UpdateService:
 
     @property
     def trusted_hosts(self) -> set[str]:
-        hosts = set(_TRUSTED_HOSTS)
-        if self.feed_url:
+        """Hosts allowed by configuration plus this app's configured feed."""
+        hosts = {str(host) for host in self.config.update_trusted_hosts if host}
+        if self.feed_url and _is_https(self.feed_url):
             hosts.add(_host_of(self.feed_url))
         return {host for host in hosts if host}
 
@@ -662,6 +810,7 @@ class UpdateService:
                     "notes": release.manifest.notes,
                     "signature": release.manifest.signature,
                     "signature_key_id": release.manifest.signature_key_id,
+                    "channel_explicit": release.manifest.channel_explicit,
                     "assets": [
                         {
                             "name": item.name,
@@ -716,29 +865,27 @@ class UpdateService:
         )
 
     async def _fetch_json(self, url: str) -> Any:
-        if not _is_https(url):
-            raise ValueError("Update feeds must use HTTPS.")
-        async with httpx.AsyncClient(
-            timeout=12.0,
-            follow_redirects=True,
+        response = await _fetch_response(
+            url,
             headers={
                 "User-Agent": USER_AGENT,
                 "Accept": "application/vnd.github+json, application/json",
             },
-        ) as client:
-            response = await client.get(url)
-            if response.status_code == 403:
-                raise ValueError(
-                    "GitHub rate-limited the update check. Try again in a few "
-                    "minutes or configure a public update feed URL in Settings → Updates."
-                )
-            if response.status_code in {401, 404}:
-                raise ValueError(
-                    "The update source is not publicly readable. Configure a "
-                    "public update feed URL in Settings → Updates."
-                )
-            response.raise_for_status()
-            return response.json()
+            trusted_hosts=self.trusted_hosts,
+            timeout=12.0,
+        )
+        if response.status_code == 403:
+            raise ValueError(
+                "GitHub rate-limited the update check. Try again in a few "
+                "minutes or configure a public update feed URL in Settings → Updates."
+            )
+        if response.status_code in {401, 404}:
+            raise ValueError(
+                "The update source is not publicly readable. Configure a "
+                "public update feed URL in Settings → Updates."
+            )
+        response.raise_for_status()
+        return response.json()
 
     async def check(self, channel: str | None = None, *, force: bool = False) -> UpdateCheck:
         """Return the newest compatible release for ``channel``."""
@@ -752,14 +899,21 @@ class UpdateService:
             try:
                 if self.feed_url:
                     payload = await self._fetch_json(self.feed_url)
-                    manifest = parse_manifest(payload, self.feed_url)
+                    manifest = parse_manifest(
+                        payload, self.feed_url, self.trusted_hosts
+                    )
+                    # Stable users require an explicitly declared stable channel.
+                    # A dashless beta version must never be treated as stable.
+                    stable_feed = (
+                        manifest.channel_explicit and manifest.channel == "stable"
+                    )
                     releases = [
                         ReleaseInfo(
                             version=manifest.version,
                             tag=f"v{manifest.version}",
                             notes=manifest.notes,
                             published_at=manifest.published_at,
-                            prerelease="-" in manifest.version,
+                            prerelease=not stable_feed or "-" in manifest.version,
                             assets=manifest.assets,
                             manifest=manifest,
                             source="feed",
@@ -871,16 +1025,14 @@ class UpdateService:
         raise ValueError(f"SHA256SUMS.txt has no entry for {filename}.")
 
     async def _fetch_text(self, url: str) -> str:
-        if not _host_allowed(url, self.trusted_hosts):
-            raise ValueError("Release asset URL is outside the trusted update source.")
-        async with httpx.AsyncClient(
-            timeout=30.0,
-            follow_redirects=True,
+        response = await _fetch_response(
+            url,
             headers={"User-Agent": USER_AGENT},
-        ) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            return response.text
+            trusted_hosts=self.trusted_hosts,
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        return response.text
 
     async def _resolve_checksum(self, release: ReleaseInfo, asset: ReleaseAsset) -> str:
         if asset.sha256:
@@ -925,28 +1077,28 @@ class UpdateService:
         digest = hashlib.sha256()
         completed = 0
         try:
-            async with httpx.AsyncClient(
-                timeout=120.0,
-                follow_redirects=True,
+            async with _stream_response(
+                asset.url,
                 headers={"User-Agent": USER_AGENT},
-            ) as client:
-                async with client.stream("GET", asset.url) as response:
-                    response.raise_for_status()
-                    total = int(response.headers.get("content-length") or asset.size or 0)
-                    if progress:
-                        progress(DownloadProgress("downloading", 0, total, asset.name))
-                    with temporary.open("wb") as stream:
-                        async for chunk in response.aiter_bytes(64 * 1024):
-                            if should_cancel and should_cancel():
-                                raise asyncio.CancelledError("Update download cancelled.")
-                            stream.write(chunk)
-                            digest.update(chunk)
-                            completed += len(chunk)
-                            if progress:
-                                progress(
-                                    DownloadProgress("downloading", completed, total, asset.name)
-                                )
-        except (httpx.HTTPError, OSError):
+                trusted_hosts=self.trusted_hosts,
+                timeout=120.0,
+            ) as response:
+                response.raise_for_status()
+                total = int(response.headers.get("content-length") or asset.size or 0)
+                if progress:
+                    progress(DownloadProgress("downloading", 0, total, asset.name))
+                with temporary.open("wb") as stream:
+                    async for chunk in response.aiter_bytes(64 * 1024):
+                        if should_cancel and should_cancel():
+                            raise asyncio.CancelledError("Update download cancelled.")
+                        stream.write(chunk)
+                        digest.update(chunk)
+                        completed += len(chunk)
+                        if progress:
+                            progress(
+                                DownloadProgress("downloading", completed, total, asset.name)
+                            )
+        except (httpx.HTTPError, OSError, ValueError):
             temporary.unlink(missing_ok=True)
             raise
         except asyncio.CancelledError:
@@ -1121,6 +1273,7 @@ class UpdateService:
             "backup_dir": str(self.data_dir / "updates" / "backups"),
             "source": release.source,
             "parent_pid": os.getpid(),
+            "parent_started_epoch": time.time(),
             "helper_path": str(helper) if helper else "",
         }
         plan_path = self._write_plan(plan)

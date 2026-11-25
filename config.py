@@ -9,6 +9,7 @@ import time
 from dataclasses import MISSING, asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import urlparse
 
 from platforms import get_platform_adapter
 from version import DEFAULT_UPDATE_CHANNEL
@@ -18,6 +19,17 @@ from version import DEFAULT_UPDATE_CHANNEL
 IMAGE_MODES = ("auto", "on", "off")
 RENDERERS = ("auto", "sixel", "tgp", "halfcell", "unicode", "off")
 THEMES = ("midnight", "aurora", "crimson")
+
+# Hosts whose HTTPS asset URLs are trusted by the in-app updater.  ANIXO reads
+# this from Config (or ANIXO_UPDATE_TRUSTED_HOSTS); it is never a hardcoded
+# allowlist inside the updater.  Suffix entries are dot-boundary matches only.
+DEFAULT_UPDATE_TRUSTED_HOSTS: tuple[str, ...] = (
+    "api.github.com",
+    "github.com",
+    "objects.githubusercontent.com",
+    "githubusercontent.com",
+)
+
 THEME_PALETTES: dict[str, dict[str, str]] = {
     "midnight": {
         "surface": "#08080d",
@@ -82,6 +94,7 @@ _DEFAULT_EXTRA: dict[str, Any] = {
     "release_timeout_minutes": 45,
     "update_feed_url": "",
     "update_public_key": "",
+    "update_trusted_hosts": list(DEFAULT_UPDATE_TRUSTED_HOSTS),
     "check_for_app_updates": True,
     "last_update_check": "",
     "last_ani_cli_check": "",
@@ -134,6 +147,8 @@ _FIELD_ALIASES: dict[str, str] = {
     "releaseTimeoutMinutes": "release_timeout_minutes",
     "updateFeedUrl": "update_feed_url",
     "updatePublicKey": "update_public_key",
+    "updateTrustedHosts": "update_trusted_hosts",
+    "update_trusted_host": "update_trusted_hosts",
     "checkForAppUpdates": "check_for_app_updates",
     "lastUpdateCheck": "last_update_check",
     "lastAniCliCheck": "last_ani_cli_check",
@@ -498,6 +513,42 @@ class Config:
     def update_public_key(self, value: str) -> None:
         self.extra["update_public_key"] = str(value).strip()
 
+    @staticmethod
+    def _normalize_hosts(value: Any) -> tuple[str, ...]:
+        if value is None:
+            return ()
+        if isinstance(value, str):
+            parts: list[Any] = re.split(r"[,\s]+", value)
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            parts = list(value)
+        else:
+            return ()
+        hosts: list[str] = []
+        for item in parts:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            host = urlparse(text).hostname if "://" in text else text
+            host = str(host or "").strip().lower()
+            if host and host not in hosts:
+                hosts.append(host)
+        return tuple(hosts)
+
+    @property
+    def update_trusted_hosts(self) -> tuple[str, ...]:
+        """HTTPS hosts trusted for update feeds and downloaded assets."""
+        configured = self.extra.get("update_trusted_hosts")
+        hosts = self._normalize_hosts(configured)
+        if not hosts:
+            hosts = self._normalize_hosts(
+                os.environ.get("ANIXO_UPDATE_TRUSTED_HOSTS", "")
+            )
+        return hosts or DEFAULT_UPDATE_TRUSTED_HOSTS
+
+    @update_trusted_hosts.setter
+    def update_trusted_hosts(self, value: Any) -> None:
+        self.extra["update_trusted_hosts"] = list(self._normalize_hosts(value))
+
     @property
     def check_for_app_updates(self) -> bool:
         value = self.extra.get("check_for_app_updates", True)
@@ -579,6 +630,7 @@ class Config:
         self.release_timeout_minutes = self.release_timeout_minutes
         self.update_feed_url = self.update_feed_url
         self.update_public_key = self.update_public_key
+        self.update_trusted_hosts = self.update_trusted_hosts
         self.check_for_app_updates = self.check_for_app_updates
         self.last_update_check = self.last_update_check
         self.last_ani_cli_check = self.last_ani_cli_check
