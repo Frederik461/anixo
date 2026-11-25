@@ -477,7 +477,11 @@ class ReleaseManager:
         self.config = config
         self.remote = str(config.release_remote or "origin").strip() or "origin"
         self.branch = str(config.release_branch or "main").strip() or "main"
-        self.repo = str(config.update_repo or "").strip()
+        # Publishing uses the release repository, optionally pinned in config.
+        # It must not inherit update_repo, which is an updater feed setting and
+        # may intentionally point at a tester's fork.
+        self._configured_repo = str(config.release_repo or "").strip()
+        self.repo = self._configured_repo
         self.workflow_rel = str(config.release_workflow or "").strip() or ".github/workflows/release.yml"
         self.timeout_seconds = max(
             5,
@@ -546,8 +550,18 @@ class ReleaseManager:
             files.append(path.relative_to(self.root))
         return sorted(files)
 
+    def _remote_repo(self) -> str:
+        result = self._git("remote", "get-url", self.remote)
+        return repo_slug(result.stdout) if result.ok else ""
+
+    def _resolve_repo(self) -> str:
+        """Use the configured release repo, or derive it from the Git remote."""
+        if not self.repo:
+            self.repo = self._remote_repo()
+        return self.repo
+
     def _base_url(self, version: str) -> str:
-        return f"https://github.com/{self.repo}/releases/download/v{version}"
+        return f"https://github.com/{self._resolve_repo()}/releases/download/v{version}"
 
     def _assert_trusted_url(self, url: str) -> None:
         if not updater_module.is_trusted_asset_url(url):
@@ -602,25 +616,27 @@ class ReleaseManager:
         if not inside.ok or inside.stdout.strip() != "true":
             self._record(results, "Git repository", FAILED, "Not inside a Git work tree.")
             return
-        remote = self._git("remote", "get-url", self.remote)
-        if not remote.ok:
+        actual = self._remote_repo()
+        if not actual:
             self._record(
                 results,
                 "Git repository",
                 FAILED,
-                f"No '{self.remote}' remote configured.",
+                f"No usable '{self.remote}' remote URL was found.",
             )
             return
-        actual = repo_slug(remote.stdout)
-        expected = repo_slug(self.repo)
-        if not expected or actual != expected:
+        expected = repo_slug(self._configured_repo)
+        if expected and actual != expected:
             self._record(
                 results,
                 "Git repository",
                 FAILED,
-                f"Remote is {actual or '<unknown>'}; expected {expected or '<unknown>'}.",
+                f"Remote is {actual}; configured release_repo is {expected}.",
             )
             return
+        # With no explicit release_repo, the Git remote is authoritative.  This
+        # keeps updater test forks in update_repo from blocking publication.
+        self.repo = actual
         self._record(results, "Git repository", PASSED, f"{self.remote} → {actual}")
 
     def _check_branch(self, results: dict[str, CheckResult]) -> None:
@@ -976,6 +992,7 @@ class ReleaseManager:
             self._print(f"[FAILED] {error}")
             return 2
 
+        self._resolve_repo()
         self._summary(current, target, channel)
         results, references = self.preflight(current, target)
         self._print_results("Preflight results", results)
@@ -1168,6 +1185,7 @@ class ReleaseManager:
         """Verify the published release against the workflow's real formats."""
         tag = tag or f"v{version}"
         results: dict[str, CheckResult] = {}
+        self._resolve_repo()
         self._print(f"\nVerifying published release {tag}")
         view = self._gh(
             "release",
@@ -1358,6 +1376,7 @@ class ReleaseManager:
             version = self.current_version()
         tag = raw if raw.startswith("v") else f"v{version}"
         channel = channel_for_version(version)
+        self._resolve_repo()
         self._summary(version, version, channel)
         self._print("Mode: verify an existing release; no files will be changed.")
 
@@ -1394,6 +1413,7 @@ class ReleaseManager:
     def history(self, limit: int = 10) -> int:
         """Show local release tags and GitHub Releases without changing anything."""
         limit = max(1, min(100, int(limit)))
+        self._resolve_repo()
         self._print(f"\nANIXO release history (last {limit})")
         tags = self._git("tag", "--sort=-v:refname")
         if tags.ok and tags.stdout.strip():

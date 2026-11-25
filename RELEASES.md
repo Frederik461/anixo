@@ -114,6 +114,10 @@ interrupted shell or workflow timeout, and `Anixo release history [limit]` to
 review local tags and published GitHub Releases. Add `--timeout-minutes MINUTES`
 to `beta`, `stable`, or `check` when a longer/shorter workflow wait is needed.
 
+The release repository is taken from `release_repo` when configured, otherwise
+from the configured Git remote. It is intentionally independent of the
+updater's `update_repo`, which may point at a tester's fork.
+
 Every publish asks for confirmation and runs preflight before changing files:
 repository/remote, branch, clean work tree, pushed HEAD, local/remote tag,
 `gh` authentication, workflow presence, required tools, full pytest suite,

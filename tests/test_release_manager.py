@@ -269,9 +269,11 @@ def _manager(
     output: list[str] | None = None,
     fetcher: Callable[[str], bytes] | None = None,
     head_fetcher: Callable[[str], tuple[int, int]] | None = None,
+    release_repo: str = TOKEN,
 ) -> rm.ReleaseManager:
     config = Config()
-    config.update_repo = TOKEN
+    config.update_repo = "tester/fork"
+    config.release_repo = release_repo
     config.release_branch = "main"
     config.release_remote = "origin"
     fetched = _fetch_map(version)
@@ -374,6 +376,18 @@ def test_preflight_passes_with_clean_git_and_gh(tmp_path: Path) -> None:
     assert results["Dependency lock"].status == rm.NOT_TESTED
     assert results["Packaging artifacts"].status == rm.NOT_TESTED
     assert references
+
+
+def test_release_repo_is_derived_from_remote_not_update_repo(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    runner = FakeRunner(root)
+    manager = _manager(root, runner, release_repo="")
+    results, _ = manager.preflight(CURRENT, NEXT_BETA)
+
+    assert not manager._failures(results)
+    assert manager.repo == TOKEN.lower()
+    assert results["Git repository"].status == rm.PASSED
+    assert results["GitHub CLI authentication"].status == rm.PASSED
 
 
 # ---------------------------------------------------------------------------

@@ -73,6 +73,9 @@ _DEFAULT_EXTRA: dict[str, Any] = {
     "update_repo": "Frederik461/anixo",
     # Release manager settings.  The workflow remains the source of truth;
     # these values only tell the CLI which ref and remote to publish from.
+    # An empty release_repo means "derive it from the configured Git remote",
+    # independently of the updater's update_repo feed setting.
+    "release_repo": "",
     "release_branch": "main",
     "release_remote": "origin",
     "release_workflow": ".github/workflows/release.yml",
@@ -124,6 +127,7 @@ _FIELD_ALIASES: dict[str, str] = {
     "migrationCompleted": "migration_completed",
     "updateChannel": "update_channel",
     "updateRepo": "update_repo",
+    "releaseRepo": "release_repo",
     "releaseBranch": "release_branch",
     "releaseRemote": "release_remote",
     "releaseWorkflow": "release_workflow",
@@ -422,6 +426,14 @@ class Config:
         self.extra["update_repo"] = str(value).strip()
 
     @property
+    def release_repo(self) -> str:
+        return str(self.extra.get("release_repo") or "").strip()
+
+    @release_repo.setter
+    def release_repo(self, value: str) -> None:
+        self.extra["release_repo"] = str(value or "").strip()
+
+    @property
     def release_branch(self) -> str:
         return str(self.extra.get("release_branch") or "main").strip() or "main"
 
@@ -560,6 +572,7 @@ class Config:
         self.migration_completed = self.migration_completed
         self.update_channel = self.update_channel
         self.update_repo = self.update_repo
+        self.release_repo = self.release_repo
         self.release_branch = self.release_branch
         self.release_remote = self.release_remote
         self.release_workflow = self.release_workflow

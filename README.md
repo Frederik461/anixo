@@ -209,11 +209,14 @@ yes; beta→stable additionally requires typing `stable`.
 
 `.github/workflows/release.yml` remains the only publisher: the CLI commits
 `Release v<version>`, pushes the configured branch, pushes the `v<version>` tag,
-then monitors the exact tagged workflow run. Configure `release_branch`,
+then monitors the exact tagged workflow run. Configure `release_repo`
+(optional; derived from the Git remote when empty), `release_branch`,
 `release_remote`, `release_workflow`, and `release_timeout_minutes` in
 `config.json` if the defaults (`main`, `origin`, that workflow, 45 minutes) are
-not appropriate. Use `--timeout-minutes MINUTES` on `beta`, `stable`, or `check`
-to override the wait once.
+not appropriate. The updater's `update_repo` is deliberately separate and may
+point at a tester's fork without affecting publication. Use
+`--timeout-minutes MINUTES` on `beta`, `stable`, or `check` to override the wait
+once.
 
 Settings → Dependencies shows the detected ani-cli revision and ownership. A
 verified ani-cli update re-downloads the official checksum-pinned script and is
