@@ -14,7 +14,7 @@ jobs:
     name: Build Windows x64 release
     runs-on: windows-latest
     env:
-      APP_VERSION: 0.1.0-beta.2
+      APP_VERSION: 0.1.0-beta.3
 
     steps:
       - name: Check out repository
@@ -35,7 +35,7 @@ jobs:
         shell: pwsh
         run: |
           $ref = '${{ github.ref_name }}'
-          if ($ref -match '^v[0-9]') { $version = $ref.Substring(1) } else { $version = '0.1.0-beta.2' }
+          if ($ref -match '^v[0-9]') { $version = $ref.Substring(1) } else { $version = '0.1.0-beta.3' }
           "APP_VERSION=$version" >> $env:GITHUB_ENV
           Write-Host "Building ANIXO v$version"
 
@@ -191,7 +191,7 @@ jobs:
           - os: macos-15-intel
             arch: x86_64
     env:
-      APP_VERSION: 0.1.0-beta.2
+      APP_VERSION: 0.1.0-beta.3
 
     steps:
       - name: Check out repository
@@ -211,7 +211,7 @@ jobs:
       - name: Derive version from tag
         run: |
           ref="${GITHUB_REF_NAME}"
-          if [[ "$ref" =~ ^v[0-9] ]]; then version="${ref#v}"; else version='0.1.0-beta.2'; fi
+          if [[ "$ref" =~ ^v[0-9] ]]; then version="${ref#v}"; else version='0.1.0-beta.3'; fi
           echo "APP_VERSION=$version" >> "$GITHUB_ENV"
           echo "Building ANIXO v$version for ${{ matrix.arch }}"
 
@@ -253,7 +253,7 @@ jobs:
     needs: [windows-build, macos-build]
     runs-on: ubuntu-latest
     env:
-      APP_VERSION: 0.1.0-beta.2
+      APP_VERSION: 0.1.0-beta.3
 
     steps:
       - name: Check out repository
@@ -262,7 +262,7 @@ jobs:
       - name: Derive version from tag
         run: |
           ref="${GITHUB_REF_NAME}"
-          if [[ "$ref" =~ ^v[0-9] ]]; then version="${ref#v}"; else version='0.1.0-beta.2'; fi
+          if [[ "$ref" =~ ^v[0-9] ]]; then version="${ref#v}"; else version='0.1.0-beta.3'; fi
           echo "APP_VERSION=$version" >> "$GITHUB_ENV"
 
       - name: Download build artifacts

@@ -1,4 +1,4 @@
-# Testing status for ANIXO v0.1.0-beta.2
+# Testing status for ANIXO v0.1.0-beta.3
 
 This file records what was **actually run locally** and what is still
 **unknown**. It is deliberately conservative: clean-machine compatibility is
@@ -29,11 +29,11 @@ been tested. Intel Mac builds are not published until independently tested.
 | One-file validation build | PASS — `dist\onefile\Anixo.exe` produced and validated. |
 | Standalone uninstaller build (`uninstaller.spec`) | PASS — `dist\ANIXO-Uninstaller.exe` produced; `--version` and `--help` exit 0. |
 | `packaging/validate_build.ps1` on both app executables | PASS — `--version`, `--help`, `--diagnose` all exited 0. |
-| Identity in frozen builds | PASS — version/help output contains ANIXO and `0.1.0-beta.2`. |
+| Identity in frozen builds | PASS — version/help output contains ANIXO and `0.1.0-beta.3`. |
 | Bundled resources | PASS — `styles/theme.tcss` and `assets/anixo.ico` found under `dist\Anixo\_internal`. |
 | Full diagnostics report | PASS — `--diagnose` prints version, OS, architecture, install/data/log paths, Python mode, playback tools, image protocol, network status and cache counts. |
 | Diagnostics redaction | PASS — automated test confirms tokens, passwords, bearer headers and URL credentials are replaced with `<redacted>` before display/export. |
-| Inno Setup compile | PASS — `ANIXO-Setup-v0.1.0-beta.2.exe` built by ISCC 6.7.3. |
+| Inno Setup compile | PASS — `ANIXO-Setup-v0.1.0-beta.3.exe` built by ISCC 6.7.3. |
 | Silent install and OS-level uninstall with redirected user data | PASS — `/VERYSILENT /NOICONS` install into a temp `/DIR`, then silent `unins000.exe`; manifest located, custom paths recorded and replayed, cache and logs removed, sentinel data preserved, empty program folder and `uninstall-paths.ini` removed, real `%APPDATA%\\ANIXO` and `%LOCALAPPDATA%\\ANIXO` unchanged. |
 | Portable ZIP | PASS — includes `Anixo.exe`, `ANIXO-Uninstaller.exe`, `START ANIXO.cmd`, `PORTABLE.md`, `PORTABLE.txt` and `_internal\styles\theme.tcss`. |
 | Portable data redirection | PASS — launcher sets `ANIXO_DATA_DIR`, `ANIXO_CACHE_DIR` and `ANIXO_LOG_DIR` to `%LOCALAPPDATA%\ANIXO\Portable`. |
@@ -111,9 +111,9 @@ been tested. Intel Mac builds are not published until independently tested.
 Release artifacts present in `dist\release` after the final Windows rebuild:
 
 ```text
-ANIXO-Setup-v0.1.0-beta.2.exe          26,862,948 bytes
-ANIXO-Uninstaller-v0.1.0-beta.2.exe     7,611,817 bytes
-ANIXO-Portable-v0.1.0-beta.2.zip       30,320,093 bytes
+ANIXO-Setup-v0.1.0-beta.3.exe          26,862,948 bytes
+ANIXO-Uninstaller-v0.1.0-beta.3.exe     7,611,817 bytes
+ANIXO-Portable-v0.1.0-beta.3.zip       30,320,093 bytes
 SHA256SUMS.txt
 build-report.txt   (diagnostic log, not a release asset)
 ```
@@ -121,9 +121,9 @@ build-report.txt   (diagnostic log, not a release asset)
 Final SHA256 values recorded in `dist\release\SHA256SUMS.txt`:
 
 ```text
-69fbc56a2572e48f82e828231920914b89f5cf86e9f3a0c02f5ae75eb0c99366  ANIXO-Portable-v0.1.0-beta.2.zip
-0a183f7b8b53013e3111742ce68e180ce71afda8a265d077b91380e00bd0ec23  ANIXO-Setup-v0.1.0-beta.2.exe
-d7cc83c3eabca6884e5765ae9ea5f061462abb9c95795c79d8a3485896ed6b32  ANIXO-Uninstaller-v0.1.0-beta.2.exe
+69fbc56a2572e48f82e828231920914b89f5cf86e9f3a0c02f5ae75eb0c99366  ANIXO-Portable-v0.1.0-beta.3.zip
+0a183f7b8b53013e3111742ce68e180ce71afda8a265d077b91380e00bd0ec23  ANIXO-Setup-v0.1.0-beta.3.exe
+d7cc83c3eabca6884e5765ae9ea5f061462abb9c95795c79d8a3485896ed6b32  ANIXO-Uninstaller-v0.1.0-beta.3.exe
 ```
 
 macOS artifacts are **not produced locally on this Windows host**. They were
@@ -195,7 +195,7 @@ validated on a user Mac).
 | 8 | `validate_build.ps1` fails loudly on a missing EXE | VERIFIED | Non-zero exit confirmed during development. |
 | 9 | One-folder build produces `dist\Anixo\Anixo.exe` | VERIFIED | Built and validated. |
 | 10 | One-file validation build produces `Anixo.exe` | VERIFIED | Validation-only artifact, not shipped. |
-| 11 | `--version` prints `ANIXO 0.1.0-beta.2` | VERIFIED | Source and frozen builds. |
+| 11 | `--version` prints `ANIXO 0.1.0-beta.3` | VERIFIED | Source and frozen builds. |
 | 12 | `--help` shows the ANIXO identity | VERIFIED | Source and frozen builds. |
 | 13 | `--diagnose` exits 0 with a useful report | VERIFIED | Full redacted report in both app builds. |
 | 14 | `styles/theme.tcss` and `assets/anixo.ico` are inside the bundle | VERIFIED | Found under `_internal`. |
@@ -269,7 +269,7 @@ powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
 
 Then, on a **clean Windows VM** with no developer tools installed:
 
-1. Run `ANIXO-Setup-v0.1.0-beta.2.exe`; confirm the default install folder.
+1. Run `ANIXO-Setup-v0.1.0-beta.3.exe`; confirm the default install folder.
 2. Launch ANIXO from the Start Menu and the optional desktop shortcut.
 3. Complete the setup wizard and confirm `setup_completed` is stored.
 4. Run `--version`, `--help`, and `--diagnose` from the install folder.

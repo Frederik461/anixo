@@ -230,7 +230,7 @@ def channel_for_version(version: str) -> str:
 
 
 def normalized_version(version: str) -> str:
-    """Return the PEP 440 form used by uv.lock (``0.1.0-beta.2`` -> ``0.1.0b2``)."""
+    """Return the PEP 440 form used by uv.lock (``0.1.0-beta.3`` -> ``0.1.0b3``)."""
     return str(Version(str(version)))
 
 

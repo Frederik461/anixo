@@ -22,11 +22,11 @@ Open the project's **Releases** page and download the assets for your platform:
 
 | Asset | Platform | Use it when |
 | --- | --- | --- |
-| `ANIXO-Setup-v0.1.0-beta.2.exe` | Windows x64 | You want a normal installed application (recommended). |
-| `ANIXO-Uninstaller-v0.1.0-beta.2.exe` | Windows x64 | You want the standalone uninstaller on its own. |
-| `ANIXO-Portable-v0.1.0-beta.2.zip` | Windows x64 | You want a no-install copy, for example on a USB drive. |
-| `ANIXO-v0.1.0-beta.2-macos-arm64.dmg` | macOS 13+ Apple Silicon | You want the drag-and-drop `.app` bundle. |
-| `ANIXO-Uninstaller-v0.1.0-beta.2-macos-arm64` | macOS 13+ Apple Silicon | Companion standalone uninstaller. |
+| `ANIXO-Setup-v0.1.0-beta.3.exe` | Windows x64 | You want a normal installed application (recommended). |
+| `ANIXO-Uninstaller-v0.1.0-beta.3.exe` | Windows x64 | You want the standalone uninstaller on its own. |
+| `ANIXO-Portable-v0.1.0-beta.3.zip` | Windows x64 | You want a no-install copy, for example on a USB drive. |
+| `ANIXO-v0.1.0-beta.3-macos-arm64.dmg` | macOS 13+ Apple Silicon | You want the drag-and-drop `.app` bundle. |
+| `ANIXO-Uninstaller-v0.1.0-beta.3-macos-arm64` | macOS 13+ Apple Silicon | Companion standalone uninstaller. |
 | `ANIXO-Updater-windows-x64.exe` / `ANIXO-Updater-macos-*.zip` | All | Standalone helper used by automatic updates. |
 | `SHA256SUMS.txt` | All | You want to verify the downloads. |
 | `release-manifest.json` | All | Pinned download URLs and digests used by the in-app updater. |
@@ -49,14 +49,14 @@ is recommended; ANIXO is a text interface.
 Windows PowerShell:
 
 ```powershell
-Get-FileHash .\ANIXO-Setup-v0.1.0-beta.2.exe -Algorithm SHA256
+Get-FileHash .\ANIXO-Setup-v0.1.0-beta.3.exe -Algorithm SHA256
 Get-Content .\SHA256SUMS.txt
 ```
 
 macOS Terminal:
 
 ```sh
-shasum -a 256 ANIXO-v0.1.0-beta.2-macos-arm64.dmg
+shasum -a 256 ANIXO-v0.1.0-beta.3-macos-arm64.dmg
 cat SHA256SUMS.txt
 ```
 
@@ -64,7 +64,7 @@ The hash must match the line for that file name in `SHA256SUMS.txt`.
 
 ## 2. Install on Windows
 
-1. Double-click `ANIXO-Setup-v0.1.0-beta.2.exe`.
+1. Double-click `ANIXO-Setup-v0.1.0-beta.3.exe`.
 2. Windows may show a SmartScreen warning for a new publisher; choose **More
    info → Run anyway** only if you trust the source.
 3. The installer runs as your normal user — **no administrator rights** are
@@ -163,7 +163,7 @@ backup and never deletes the old folder or overwrites existing ANIXO data.
 ### Automatic (recommended)
 
 Press `U`, or go to Settings → Updates → **Open update center**. Choose your
-channel in Settings → Updates (`beta` is the default for `0.1.0-beta.2`; stable
+channel in Settings → Updates (`beta` is the default for `0.1.0-beta.3`; stable
 builds default to `stable` and never receive betas). **Check** uses GitHub
 Releases or a configured HTTPS feed; **Update ANIXO** downloads only after you
 approve. **Cancel** stays available until installation begins. Once the staged
@@ -232,7 +232,7 @@ never deleted silently.
 
 ## 9. Portable mode (Windows)
 
-1. Extract `ANIXO-Portable-v0.1.0-beta.2.zip` to any folder.
+1. Extract `ANIXO-Portable-v0.1.0-beta.3.zip` to any folder.
 2. Double-click **START ANIXO.cmd**. You can also run `Anixo.exe` directly.
 
 Portable mode has no installer, no Start Menu entry, no desktop shortcut, and

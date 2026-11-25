@@ -12,7 +12,7 @@ APP_DESCRIPTION = "A modern anime discovery and streaming application."
 APP_TAGLINE = "Your anime. Your world."
 PUBLISHER = "ANIXO"
 
-__version__ = "0.1.0-beta.2"
+__version__ = "0.1.0-beta.3"
 VERSION = __version__
 APP_VERSION = VERSION
 
