@@ -259,6 +259,7 @@ class AnixoApp(App[None]):
         self._setup_screen: SetupScreen | None = None
         self._setup_snapshot: SetupSnapshot | None = None
         self._update_status = "No update check yet."
+        self._shown_update_messages: set[str] = set()
         self._route_history: list[type] = []
         self._route_index = -1
 
@@ -1275,12 +1276,20 @@ class AnixoApp(App[None]):
         if not self._editing():
             self._switch(UpdateScreen())
 
+    def _report_auto_update_status(self, message: str) -> None:
+        """Show a concise auto-check status once per distinct message."""
+        text = redact_update_text(str(message)).strip()
+        if not text or text in self._shown_update_messages:
+            return
+        self._shown_update_messages.add(text)
+        self._set_update_status(text, busy=False)
+        self.notify_user(text, timeout=5)
+
     async def _auto_check_updates(self) -> None:
         check = await self.updates.check(self.config.update_channel)
-        if check.error or check.cached:
-            return
-        self.config.last_update_check = check.checked_at
-        self.config_store.save(self.config)
+        if check.checked_at:
+            self.config.last_update_check = check.checked_at
+            self.config_store.save(self.config)
         state = self.update_state
         state.current = check.current
         state.available = check.available
@@ -1288,6 +1297,15 @@ class AnixoApp(App[None]):
         state.channel = check.channel
         state.release = check.release
         state.notes = check.release.notes if check.release else ""
+        state.error = redact_update_text(check.error)
+        if check.error and not check.cached:
+            self._report_auto_update_status(f"Update check failed — {check.error}")
+            return
+        if check.cached:
+            self._report_auto_update_status(
+                check.message or check.error or "Cached update result."
+            )
+            return
         if check.update_available:
             state.status = redact_update_text(
                 f"UPDATE AVAILABLE — ANIXO {check.available}"

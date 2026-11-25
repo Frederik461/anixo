@@ -66,6 +66,8 @@ _SECTIONS: dict[str, tuple[tuple[str, str, str, tuple[str, ...] | None], ...]] =
     "Updates": (
         ("Update channel", "update_channel", "choice", ("stable", "beta")),
         ("Check automatically", "check_for_app_updates", "bool", None),
+        ("Check interval (min)", "update_check_interval_minutes", "int", None),
+        ("Cache max age (days)", "update_cache_max_age_days", "int", None),
         ("Installed version", "app_installed_version", "readonly", None),
         ("Latest version", "app_latest_version", "readonly", None),
         ("Update status", "update_status", "readonly", None),

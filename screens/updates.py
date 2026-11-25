@@ -36,7 +36,8 @@ class UpdateScreen(ShellScreen):
             with Vertical(id="update-panel"):
                 yield Static("ANIXO UPDATES", classes="section-heading")
                 yield Static(
-                    "Checks use the configured public release feed. No credentials are stored.",
+                    "Checks use the configured public release feed. Recent results are "
+                    "cached; no credentials are stored.",
                     id="update-intro",
                     classes="meta-text",
                 )

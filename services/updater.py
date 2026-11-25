@@ -26,7 +26,7 @@ import subprocess
 import sys
 import time
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterator
@@ -40,17 +40,55 @@ from services.install_manifest import (
     COMPONENT_APP,
     ManifestStore,
 )
-from services.update_log import UpdateLog, redact_update_text
+from services.update_log import UpdateLog, redact_update_text, redact_update_value
 from version import APP_NAME, APP_VERSION, DEFAULT_UPDATE_CHANNEL
 
 DEFAULT_REPO = "Frederik461/anixo"
 USER_AGENT = f"ANIXO/{APP_VERSION}"
 _RELEASES_URL = "https://api.github.com/repos/{repo}/releases"
 _LATEST_URL = "https://api.github.com/repos/{repo}/releases/latest"
-_CACHE_TTL_SECONDS = 6 * 60 * 60
+_CACHE_SCHEMA_VERSION = 2
+_MANUAL_COOLDOWN_SECONDS = 60
+_RATE_LIMIT_MESSAGE = (
+    "GitHub rate-limited the update check. Try again in a few minutes or "
+    "configure a public update feed URL in Settings → Updates."
+)
 _MAX_REDIRECTS = 5
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 _SAFE_REDIRECT_HEADERS = {"user-agent", "accept", "accept-encoding"}
+
+
+class _RateLimitError(ValueError):
+    """The update source returned HTTP 403."""
+
+
+class _NotModified(Exception):
+    """The update source confirmed the cached response is still current."""
+
+
+@dataclass(frozen=True, slots=True)
+class ReleaseCacheEntry:
+    """One validated, last-good release check with conditional request metadata."""
+
+    repo: str
+    channel: str
+    feed_url: str
+    checked_epoch: float
+    etag: str
+    last_modified: str
+    check: UpdateCheck
+
+    @property
+    def age_seconds(self) -> float:
+        return max(0.0, time.time() - self.checked_epoch)
+
+    def headers(self) -> dict[str, str]:
+        result: dict[str, str] = {}
+        if self.etag:
+            result["If-None-Match"] = self.etag
+        if self.last_modified:
+            result["If-Modified-Since"] = self.last_modified
+        return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,6 +284,18 @@ def _version_key(
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _ago(seconds: float) -> str:
+    """Plain-language age used in cached update messages."""
+    value = max(0, int(seconds))
+    if value < 60:
+        return f"{value}s ago"
+    if value < 3600:
+        return f"{value // 60}m ago"
+    if value < 86400:
+        return f"{value // 3600}h ago"
+    return f"{value // 86400}d ago"
 
 
 def _safe_error(error: BaseException) -> str:
@@ -710,6 +760,8 @@ class UpdateService:
         self.target = target or detect_target(self.adapter.system)
         self.log = UpdateLog(self.data_dir)
         self._lock = asyncio.Lock()
+        self._last_attempt_epoch: float | None = None
+        self._last_response_headers: dict[str, str] = {}
 
     @property
     def repository(self) -> str:
@@ -738,46 +790,108 @@ class UpdateService:
     def _cache_path(self, channel: str) -> Path:
         return self.data_dir / "updates" / f"release-{normalize_channel(channel)}.json"
 
-    def _read_cache(self, channel: str) -> UpdateCheck | None:
+    def _read_cache(
+        self, channel: str, *, include_expired: bool = False
+    ) -> ReleaseCacheEntry | None:
+        name = normalize_channel(channel)
         try:
-            raw = json.loads(self._cache_path(channel).read_text(encoding="utf-8"))
+            raw = json.loads(self._cache_path(name).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
-        if not isinstance(raw, dict) or float(raw.get("checked_epoch", 0)) <= 0:
+        if not isinstance(raw, dict) or int(raw.get("schema_version", 0)) != _CACHE_SCHEMA_VERSION:
             return None
-        if time.time() - float(raw["checked_epoch"]) > _CACHE_TTL_SECONDS:
+        if str(raw.get("error") or ""):
             return None
-        release = self._release_from_mapping(raw.get("release")) if raw.get("release") else None
-        return UpdateCheck(
+        try:
+            checked_epoch = float(raw.get("checked_epoch") or 0)
+        except (TypeError, ValueError):
+            return None
+        if checked_epoch <= 0 or checked_epoch > time.time() + 60:
+            return None
+        if str(raw.get("repo") or "") != self.repository:
+            return None
+        if normalize_channel(str(raw.get("channel") or "")) != name:
+            return None
+        if str(raw.get("feed_url") or "") != self.feed_url:
+            return None
+        max_age = max(1, int(self.config.update_cache_max_age_days)) * 86400
+        age = max(0.0, time.time() - checked_epoch)
+        if age > max_age and not include_expired:
+            return None
+        try:
+            release = (
+                self._release_from_mapping(
+                    raw.get("release"), trusted_hosts=self.trusted_hosts
+                )
+                if raw.get("release")
+                else None
+            )
+        except (TypeError, ValueError):
+            return None
+        if name == "stable" and release is not None:
+            manifest = release.manifest
+            if release.prerelease or (
+                manifest is not None and manifest.channel != "stable"
+            ):
+                return None
+        check = UpdateCheck(
             current=APP_VERSION,
             available=str(raw.get("available") or ""),
             update_available=bool(raw.get("update_available")),
-            channel=normalize_channel(raw.get("channel") or channel),
+            channel=name,
             release=release,
-            error=str(raw.get("error") or ""),
+            error="",
             cached=True,
             checked_at=str(raw.get("checked_at") or ""),
             message=str(raw.get("message") or ""),
         )
+        return ReleaseCacheEntry(
+            repo=self.repository,
+            channel=name,
+            feed_url=self.feed_url,
+            checked_epoch=checked_epoch,
+            etag=str(raw.get("etag") or ""),
+            last_modified=str(raw.get("last_modified") or ""),
+            check=check,
+        )
 
-    def _write_cache(self, check: UpdateCheck) -> None:
+    def _write_cache(
+        self,
+        check: UpdateCheck,
+        *,
+        etag: str = "",
+        last_modified: str = "",
+        checked_epoch: float | None = None,
+    ) -> None:
+        if check.error:
+            return
         path = self._cache_path(check.channel)
+        payload = {
+            "schema_version": _CACHE_SCHEMA_VERSION,
+            "repo": self.repository,
+            "channel": normalize_channel(check.channel),
+            "feed_url": self.feed_url,
+            "checked_epoch": float(checked_epoch or time.time()),
+            "checked_at": check.checked_at or _timestamp(),
+            "etag": etag,
+            "last_modified": last_modified,
+            "available": check.available,
+            "update_available": check.update_available,
+            "error": "",
+            "message": check.message,
+            "release": self._release_mapping(check.release) if check.release else None,
+        }
+        temporary = path.with_name(
+            f"{path.name}.{os.getpid()}.{time.time_ns()}.tmp"
+        )
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            payload = {
-                "checked_epoch": time.time(),
-                "checked_at": _timestamp() or check.checked_at,
-                "available": check.available,
-                "update_available": check.update_available,
-                "channel": check.channel,
-                "error": check.error,
-                "message": check.message,
-                "release": self._release_mapping(check.release) if check.release else None,
-            }
-            temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-            temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            temporary.write_text(
+                json.dumps(redact_update_value(payload), indent=2), encoding="utf-8"
+            )
             temporary.replace(path)
         except OSError:
+            temporary.unlink(missing_ok=True)
             self.log.log("cache_write_failed", channel=check.channel)
 
     @staticmethod
@@ -830,7 +944,9 @@ class UpdateService:
         }
 
     @staticmethod
-    def _release_from_mapping(data: Any) -> ReleaseInfo | None:
+    def _release_from_mapping(
+        data: Any, *, trusted_hosts: set[str] | None = None
+    ) -> ReleaseInfo | None:
         if not isinstance(data, dict):
             return None
         assets = tuple(
@@ -846,12 +962,18 @@ class UpdateService:
             for item in data.get("assets", [])
             if isinstance(item, dict) and item.get("name")
         )
+        if trusted_hosts is not None and any(
+            item.url and not _host_allowed(item.url, trusted_hosts) for item in assets
+        ):
+            raise ValueError("Cached release asset is outside the trusted host list.")
         manifest = None
         raw_manifest = data.get("manifest")
         if isinstance(raw_manifest, dict):
             try:
-                manifest = parse_manifest(raw_manifest)
+                manifest = parse_manifest(raw_manifest, trusted_hosts=trusted_hosts)
             except ValueError:
+                if trusted_hosts is not None:
+                    raise
                 manifest = None
         return ReleaseInfo(
             version=str(data.get("version") or ""),
@@ -864,21 +986,33 @@ class UpdateService:
             source=str(data.get("source") or "github"),
         )
 
-    async def _fetch_json(self, url: str) -> Any:
+    async def _fetch_json(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        allow_not_modified: bool = False,
+    ) -> Any:
+        request_headers = {
+            "User-Agent": USER_AGENT,
+            "Accept": "application/vnd.github+json, application/json",
+        }
+        request_headers.update(headers or {})
+        self._last_response_headers = {}
         response = await _fetch_response(
             url,
-            headers={
-                "User-Agent": USER_AGENT,
-                "Accept": "application/vnd.github+json, application/json",
-            },
+            headers=request_headers,
             trusted_hosts=self.trusted_hosts,
             timeout=12.0,
         )
+        self._last_response_headers = {
+            str(key).lower(): str(value)
+            for key, value in (getattr(response, "headers", None) or {}).items()
+        }
+        if allow_not_modified and response.status_code == 304:
+            raise _NotModified()
         if response.status_code == 403:
-            raise ValueError(
-                "GitHub rate-limited the update check. Try again in a few "
-                "minutes or configure a public update feed URL in Settings → Updates."
-            )
+            raise _RateLimitError(_RATE_LIMIT_MESSAGE)
         if response.status_code in {401, 404}:
             raise ValueError(
                 "The update source is not publicly readable. Configure a "
@@ -887,23 +1021,151 @@ class UpdateService:
         response.raise_for_status()
         return response.json()
 
+    @staticmethod
+    def _cached_check(
+        entry: ReleaseCacheEntry, message: str = "", error: str = ""
+    ) -> UpdateCheck:
+        """Return a cached result with an explicit age label."""
+        age = _ago(entry.age_seconds)
+        base_message = message or entry.check.message or "Cached update result."
+        if "ago" not in base_message and "Cached" not in base_message:
+            base_message = f"Cached result from {age} — {base_message}"
+        return replace(entry.check, cached=True, error=error, message=base_message)
+
     async def check(self, channel: str | None = None, *, force: bool = False) -> UpdateCheck:
-        """Return the newest compatible release for ``channel``."""
+        """Return the newest compatible release, using validated caching."""
         name = normalize_channel(channel or self.config.update_channel)
+        now = time.time()
+        interval = max(1, int(self.config.update_check_interval_minutes)) * 60
         async with self._lock:
-            if not force:
-                cached = self._read_cache(name)
-                if cached:
-                    self.log.log("check_cache_hit", channel=name, available=cached.available)
-                    return cached
+            cache = self._read_cache(name)
+            if cache:
+                age = cache.age_seconds
+                if not force and age < interval:
+                    self.log.log(
+                        "check_cache_hit", channel=name, available=cache.check.available
+                    )
+                    return self._cached_check(cache)
+                if force and age < _MANUAL_COOLDOWN_SECONDS:
+                    self.log.log("check_manual_cooldown", channel=name)
+                    return self._cached_check(
+                        cache, f"Cached result from {_ago(age)}; retry shortly."
+                    )
+            elif not force and self._last_attempt_epoch is not None:
+                last_age = max(0.0, now - self._last_attempt_epoch)
+                if last_age < interval:
+                    return UpdateCheck(
+                        APP_VERSION,
+                        "",
+                        False,
+                        name,
+                        None,
+                        "",
+                        cached=True,
+                        checked_at=_timestamp(),
+                        message=f"Last checked {_ago(last_age)}; retry shortly.",
+                    )
+            if force and self._last_attempt_epoch is not None:
+                last_age = max(0.0, now - self._last_attempt_epoch)
+                if last_age < _MANUAL_COOLDOWN_SECONDS:
+                    return UpdateCheck(
+                        APP_VERSION,
+                        "",
+                        False,
+                        name,
+                        None,
+                        "",
+                        cached=True,
+                        checked_at=_timestamp(),
+                        message=f"Last checked {_ago(last_age)}; retry shortly.",
+                    )
+            self._last_attempt_epoch = now
+            url = self.feed_url or _RELEASES_URL.format(repo=self.repository)
+            conditional = cache.headers() if cache else {}
+            fetch_kwargs: dict[str, Any] = {}
+            if conditional:
+                fetch_kwargs = {
+                    "headers": conditional,
+                    "allow_not_modified": True,
+                }
+            try:
+                payload = await self._fetch_json(url, **fetch_kwargs)
+            except _NotModified:
+                if cache is None:
+                    result = UpdateCheck(
+                        APP_VERSION,
+                        "",
+                        False,
+                        name,
+                        None,
+                        "The update source returned 304 without a usable cache.",
+                        checked_at=_timestamp(),
+                    )
+                    self.log.log("check_304_without_cache", channel=name)
+                    return result
+                etag = self._last_response_headers.get("etag") or cache.etag
+                modified = (
+                    self._last_response_headers.get("last-modified")
+                    or cache.last_modified
+                )
+                self._write_cache(
+                    cache.check, etag=etag, last_modified=modified
+                )
+                self.log.log("check_not_modified", channel=name)
+                return self._cached_check(
+                    cache, f"Cached result from {_ago(cache.age_seconds)}; source reports no change."
+                )
+            except (httpx.HTTPError, _RateLimitError) as error:
+                detail = _safe_error(error)
+                if cache is not None:
+                    prefix = (
+                        _RATE_LIMIT_MESSAGE
+                        if isinstance(error, _RateLimitError)
+                        else f"Update check unavailable: {detail}"
+                    )
+                    fallback = self._cached_check(
+                        cache,
+                        f"{prefix} Showing result from {_ago(cache.age_seconds)}.",
+                    )
+                    self.log.log("check_fallback", channel=name, reason=detail)
+                    return fallback
+                expired = self._read_cache(name, include_expired=True)
+                if expired is not None:
+                    message = (
+                        f"Last good check was {_ago(expired.age_seconds)}, "
+                        "too old to trust; retry later."
+                    )
+                else:
+                    message = detail
+                result = UpdateCheck(
+                    APP_VERSION,
+                    "",
+                    False,
+                    name,
+                    None,
+                    message,
+                    checked_at=_timestamp(),
+                )
+                self.log.log("check_failed", channel=name, error=result.error)
+                return result
+            except ValueError as error:
+                result = UpdateCheck(
+                    APP_VERSION,
+                    "",
+                    False,
+                    name,
+                    None,
+                    _safe_error(error),
+                    checked_at=_timestamp(),
+                )
+                self.log.log("check_failed", channel=name, error=result.error)
+                return result
+
             try:
                 if self.feed_url:
-                    payload = await self._fetch_json(self.feed_url)
                     manifest = parse_manifest(
                         payload, self.feed_url, self.trusted_hosts
                     )
-                    # Stable users require an explicitly declared stable channel.
-                    # A dashless beta version must never be treated as stable.
                     stable_feed = (
                         manifest.channel_explicit and manifest.channel == "stable"
                     )
@@ -920,9 +1182,6 @@ class UpdateService:
                         )
                     ]
                 else:
-                    payload = await self._fetch_json(
-                        _RELEASES_URL.format(repo=self.repository)
-                    )
                     if not isinstance(payload, list):
                         raise ValueError("GitHub returned an unexpected releases payload.")
                     releases = []
@@ -932,9 +1191,15 @@ class UpdateService:
                                 releases.append(self._release_from_json(item))
                             except (KeyError, TypeError, ValueError):
                                 continue
-            except (httpx.HTTPError, ValueError) as error:
+            except ValueError as error:
                 result = UpdateCheck(
-                    APP_VERSION, "", False, name, None, _safe_error(error), checked_at=_timestamp()
+                    APP_VERSION,
+                    "",
+                    False,
+                    name,
+                    None,
+                    _safe_error(error),
+                    checked_at=_timestamp(),
                 )
                 self.log.log("check_failed", channel=name, error=result.error)
                 return result
@@ -944,13 +1209,15 @@ class UpdateService:
         compatible = [
             release for release in releases if select_asset(release, self.target) is not None
         ]
+        etag = self._last_response_headers.get("etag", "")
+        modified = self._last_response_headers.get("last-modified", "")
         if not compatible:
             message = (
                 f"No {name} release has a compatible asset for {self.target.label}."
             )
             result = UpdateCheck(APP_VERSION, "", False, name, None, "", message=message)
             self.log.log("check_no_compatible_asset", channel=name, target=self.target.key)
-            self._write_cache(result)
+            self._write_cache(result, etag=etag, last_modified=modified)
             return result
         release = max(compatible, key=lambda item: _version_key(parse_version(item.version)))
         available = release.version
@@ -978,7 +1245,7 @@ class UpdateService:
             update_available=newer,
             source=release.source,
         )
-        self._write_cache(result)
+        self._write_cache(result, etag=etag, last_modified=modified)
         return result
 
     @staticmethod

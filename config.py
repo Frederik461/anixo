@@ -95,6 +95,8 @@ _DEFAULT_EXTRA: dict[str, Any] = {
     "update_feed_url": "",
     "update_public_key": "",
     "update_trusted_hosts": list(DEFAULT_UPDATE_TRUSTED_HOSTS),
+    "update_check_interval_minutes": 30,
+    "update_cache_max_age_days": 7,
     "check_for_app_updates": True,
     "last_update_check": "",
     "last_ani_cli_check": "",
@@ -149,6 +151,10 @@ _FIELD_ALIASES: dict[str, str] = {
     "updatePublicKey": "update_public_key",
     "updateTrustedHosts": "update_trusted_hosts",
     "update_trusted_host": "update_trusted_hosts",
+    "updateCheckIntervalMinutes": "update_check_interval_minutes",
+    "update_check_interval": "update_check_interval_minutes",
+    "updateCacheMaxAgeDays": "update_cache_max_age_days",
+    "update_cache_max_age": "update_cache_max_age_days",
     "checkForAppUpdates": "check_for_app_updates",
     "lastUpdateCheck": "last_update_check",
     "lastAniCliCheck": "last_ani_cli_check",
@@ -550,6 +556,38 @@ class Config:
         self.extra["update_trusted_hosts"] = list(self._normalize_hosts(value))
 
     @property
+    def update_check_interval_minutes(self) -> int:
+        try:
+            minutes = int(self.extra.get("update_check_interval_minutes", 30))
+        except (TypeError, ValueError):
+            return 30
+        return max(1, min(1440, minutes))
+
+    @update_check_interval_minutes.setter
+    def update_check_interval_minutes(self, value: int | str) -> None:
+        try:
+            minutes = int(value)
+        except (TypeError, ValueError):
+            minutes = 30
+        self.extra["update_check_interval_minutes"] = max(1, min(1440, minutes))
+
+    @property
+    def update_cache_max_age_days(self) -> int:
+        try:
+            days = int(self.extra.get("update_cache_max_age_days", 7))
+        except (TypeError, ValueError):
+            return 7
+        return max(1, min(365, days))
+
+    @update_cache_max_age_days.setter
+    def update_cache_max_age_days(self, value: int | str) -> None:
+        try:
+            days = int(value)
+        except (TypeError, ValueError):
+            days = 7
+        self.extra["update_cache_max_age_days"] = max(1, min(365, days))
+
+    @property
     def check_for_app_updates(self) -> bool:
         value = self.extra.get("check_for_app_updates", True)
         return value if isinstance(value, bool) else str(value).lower() != "false"
@@ -631,6 +669,8 @@ class Config:
         self.update_feed_url = self.update_feed_url
         self.update_public_key = self.update_public_key
         self.update_trusted_hosts = self.update_trusted_hosts
+        self.update_check_interval_minutes = self.update_check_interval_minutes
+        self.update_cache_max_age_days = self.update_cache_max_age_days
         self.check_for_app_updates = self.check_for_app_updates
         self.last_update_check = self.last_update_check
         self.last_ani_cli_check = self.last_ani_cli_check

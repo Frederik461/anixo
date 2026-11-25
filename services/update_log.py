@@ -42,6 +42,17 @@ def redact_update_text(value: str) -> str:
     return text[:2000]
 
 
+def redact_update_value(value: Any) -> Any:
+    """Recursively redact strings in persisted structured data."""
+    if isinstance(value, str):
+        return redact_update_text(value)
+    if isinstance(value, dict):
+        return {key: redact_update_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [redact_update_value(item) for item in value]
+    return value
+
+
 class UpdateLog:
     """Small JSON-lines logger used by the app and the updater helper."""
 
@@ -54,7 +65,7 @@ class UpdateLog:
             "event": redact_update_text(event),
         }
         for key, value in fields.items():
-            payload[key] = redact_update_text(value) if isinstance(value, str) else value
+            payload[key] = redact_update_value(value)
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as stream:
