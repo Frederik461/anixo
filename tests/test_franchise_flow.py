@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from app import AnixoApp
+from components.resume_dialog import ResumeDialog
 from config import Config, get_franchise_selection, remember_franchise_selection
 from models.anime import Anime, AnimeTitle, HistoryEntry
 from screens.episode_selector import EpisodeSelectorScreen
@@ -246,6 +247,50 @@ def test_exact_spawn_refuses_title_only_search(
     )
     assert process is None
     assert "argv" not in captured
+
+
+def test_details_select_episode_resolves_provider_without_resume_prompt(
+    tmp_path: Path,
+) -> None:
+    app = _test_app(tmp_path)
+    anime = _sample_anime()
+    app.database.upsert_anime(anime)
+    app.database.record_history(anime, "7", entry_id=anime.id)
+    results = parse_search_page(SEARCH_HTML)
+    app.provider.search = lambda query: results  # type: ignore[method-assign]
+    app.provider.episodes = lambda source_id: [  # type: ignore[method-assign]
+        ProviderEpisode("1", "1", "One"),
+        ProviderEpisode("2", "2", "Two"),
+    ]
+    remember_franchise_selection(
+        app.config, "overlord", "overlord-iv-1502", "Overlord IV", "7"
+    )
+
+    async def run() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app.open_details(anime.id)
+            await pilot.pause()
+            details = app.screen
+            details.action_select_episode()
+            for _ in range(8):
+                await pilot.pause()
+                if isinstance(app.screen, SeasonSelectorScreen):
+                    break
+            assert isinstance(app.screen, SeasonSelectorScreen)
+            assert not any(isinstance(screen, ResumeDialog) for screen in app.screen_stack)
+
+            await app.screen.action_choose()
+            for _ in range(8):
+                await pilot.pause()
+                if isinstance(app.screen, EpisodeSelectorScreen):
+                    break
+            selector = app.screen
+            assert isinstance(selector, EpisodeSelectorScreen)
+            assert selector.anime.source_id == "overlord-iv-1502"
+            assert [episode.number for episode in selector.episodes] == ["1", "2"]
+
+    asyncio.run(run())
 
 
 def test_history_without_provider_id_refuses_interactive_playback(

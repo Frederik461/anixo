@@ -289,7 +289,11 @@ class AnimeDetailsScreen(ShellScreen):
     def action_select_episode(self) -> None:
         self._last_marked_episode = None
         if self.anime:
-            self.app.open_episode_selector(self.anime)
+            self.run_worker(
+                self.app.watch_anime(self.anime, force_selector=True),
+                exclusive=True,
+                group="details-select",
+            )
 
     async def action_watchlist(self) -> None:
         if not self.anime:

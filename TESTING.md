@@ -20,7 +20,7 @@ been tested. Intel Mac builds are not published until independently tested.
 | Check | Result |
 | --- | --- |
 | `uv lock --check` | PASS — frozen lock resolves. |
-| `python -m pytest -q` | PASS — **277 passed** on real Windows on 2026-11-25 after the release-manager work (251 after the update work); **277 passed** on both GitHub-hosted macOS runners during the successful tagged release workflow. Earlier macOS checks were `202 passed, 1 skipped` (Windows-only cmd-wrapper test). |
+| `python -m pytest -q` | PASS — **280 passed** on real Windows on 2026-11-25 after the release-manager work (251 after the update work); **280 passed** on both GitHub-hosted macOS runners during the successful tagged release workflow. Earlier macOS checks were `202 passed, 1 skipped` (Windows-only cmd-wrapper test). |
 | `python -m compileall` / `py_compile` over source, services, platforms, screens, tests | PASS — no syntax errors. |
 | `uninstaller.py --version` / `--help` | PASS — standalone CLI starts and lists all options. |
 | `assets/make_icons.py` | PASS — ICO files contain 16/32/48/64/128/256 px frames and `anixo.png` source for `.icns`. |
@@ -73,7 +73,7 @@ been tested. Intel Mac builds are not published until independently tested.
 | --- | --- |
 | `pytest -q tests/test_release_manager.py` | PASS — 22 passed. |
 | `pytest -q tests/test_cli.py tests/test_release_manager.py` | PASS — 30 passed; existing CLI parsing/install/version tests unchanged. |
-| `pytest -q` | PASS — **277 passed in 137.43s** on Windows 11, Python 3.12.10 after the release-manager work. |
+| `pytest -q` | PASS — **280 passed in 250.94s** on Windows 11, Python 3.12.10 after the episode-loading fix. |
 | `compileall -q main.py config.py version.py services updater_helper.py screens packaging/make_release_manifest.py` | PASS — no syntax errors. |
 | Git/gh/HTTP isolation | PASS — injected runner, confirmer, fetcher, head fetcher, clock, and sleep fakes; no token value is printed. |
 | Release repository resolution with maintainer config | PASS — with `update_repo=fred8/anixo`, the manager resolved `origin` → `frederik461/anixo` and `gh` authentication passed. |
@@ -85,6 +85,17 @@ been tested. Intel Mac builds are not published until independently tested.
 | Update-screen initial button state flake | FIXED — `test_update_screen_buttons_are_mouse_and_keyboard_accessible` now waits for the async mount state instead of asserting after one `pilot.pause()`. |
 | Existing Textual timing flake | FIXED — `test_watch_without_history_opens_selector` now waits for the exclusive watch worker's screen state instead of relying on one `pilot.pause()` under full-suite load. |
 | Real GitHub tag, workflow run, and published release | PASS — the manager pushed the next sequential beta tag, found run `45670292462`, and all Windows/macOS build jobs plus the aggregated publish job succeeded. Verification passed for release metadata, 12 assets, HTTPS asset URLs, manifest schema/channel/7 pinned assets, 10 checksum entries, and agreement between GitHub, the manifest, and `SHA256SUMS.txt`. Real-terminal install/update behaviour remains a manual test. |
+
+## Episode-loading fix (2026-11-25)
+
+| Check | Result |
+| --- | --- |
+| Full regression suite | PASS — **280 passed in 250.94s** on Windows 11, Python 3.12.10 after the fix. |
+| Stale `RELEASING` metadata | FIXED — AniList details are refreshed when airing progress is unknown; a newly finished series now copies `FINISHED` status even when `nextAiringEpisode` is absent, so its planned episodes are no longer capped at zero. |
+| Details → Select Episode | FIXED — Select Episode now resolves provider results and the exact season before opening the browser, and skips the resume prompt. Provider episode rows remain authoritative over AniList's planned count. |
+| Provider lookup failures | FIXED — failures are shown in the episode list instead of being silently converted to an empty page. The list shows a visible loading state, an actionable error message, and an `R` retry path; direct numeric playback still works. |
+| Automated coverage | PASS — new tests cover stale-to-finished metadata, resolved provider browsing without a resume prompt, provider failure messaging, and retry recovery. |
+| macOS compatibility of this fix | NOT TESTED locally; the tagged release workflow will run the same suite on both macOS runners. |
 
 ## Episode-release, mouse, and performance work (2026-11-24)
 

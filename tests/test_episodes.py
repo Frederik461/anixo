@@ -27,7 +27,7 @@ from models.episode import (
 from screens.anime_details import AnimeDetailsScreen
 from screens.episode_selector import EpisodeCell, EpisodeSelectorScreen
 from services.ani_cli import AniCliInvocation, AniCliService
-from services.provider import ProviderEpisode
+from services.provider import ProviderEpisode, ProviderError
 
 
 # ---------------------------------------------------------------------------
@@ -773,6 +773,29 @@ def test_refresh_airing_progress_recovers_missing_next_airing(tmp_path: Path) ->
     ]
 
 
+def test_refresh_airing_progress_accepts_finished_status(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    anime = sample_anime(anilist_id=154587, episodes=25, status="RELEASING")
+
+    async def fake_details(anilist_id: int, *, refresh: bool = False):
+        assert anilist_id == 154587 and refresh is True
+        return sample_anime(
+            id=str(anilist_id),
+            anilist_id=anilist_id,
+            episodes=25,
+            status="FINISHED",
+        )
+
+    app.api.details = fake_details  # type: ignore[method-assign]
+    refreshed = asyncio.run(app.refresh_airing_progress(anime))
+
+    assert refreshed.status == "FINISHED"
+    assert refreshed.next_airing_episode is None
+    assert len(build_episodes(refreshed)) == 25
+    stored = app.database.get_anime(anime.id)
+    assert stored is not None and stored.status == "FINISHED"
+
+
 def test_selector_renders_source_groups_and_updates_info_panel(tmp_path: Path) -> None:
     app = make_app(tmp_path)
     anime = sample_anime(episodes=3)
@@ -851,6 +874,46 @@ def test_selector_uses_provider_released_episodes_without_explicit_entries(
                 "Arrival",
                 "Departure",
             ]
+
+    asyncio.run(run())
+
+
+def test_selector_reports_provider_failure_and_retry_recovers(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    anime = sample_anime(episodes=25, status="RELEASING")
+    app.database.upsert_anime(anime)
+    calls = 0
+
+    def episodes(source_id: str) -> list[ProviderEpisode]:
+        nonlocal calls
+        calls += 1
+        assert source_id == anime.source_id
+        if calls == 1:
+            raise ProviderError("provider is offline")
+        return [ProviderEpisode("1", "1001", "Arrival")]
+
+    app.provider.episodes = episodes  # type: ignore[method-assign]
+
+    async def run() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app.open_episode_selector(anime)
+            for _ in range(5):
+                await pilot.pause()
+            selector = app.screen
+            assert isinstance(selector, EpisodeSelectorScreen)
+            assert selector.episodes == []
+            assert selector._source_error and "provider is offline" in selector._source_error
+            message = str(selector.query_one(".state-message", Static).content)
+            assert "provider is offline" in message
+            assert "Press R to retry" in message
+
+            await pilot.press("r")
+            for _ in range(5):
+                await pilot.pause()
+            assert [episode.number for episode in selector.episodes] == ["1"]
+            assert [episode.title for episode in selector.episodes] == ["Arrival"]
+            assert calls == 2
 
     asyncio.run(run())
 

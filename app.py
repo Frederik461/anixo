@@ -464,12 +464,14 @@ class AnixoApp(App[None]):
         self.push_screen(EpisodeSelectorScreen(anime, entries=entries))
 
     async def refresh_airing_progress(self, anime: Anime) -> Anime:
-        """Refresh cached AniList data for a releasing series when needed.
+        """Refresh stale AniList metadata that controls released episodes.
 
         Existing installs may have metadata cached from before ANIXO tracked
-        ``nextAiringEpisode``. Without it, a season's full planned episode count
-        would look like released episodes. The refresh is skipped when the
-        number is already known, and failures leave the cached data untouched.
+        ``nextAiringEpisode``. Without it, a releasing series with unknown
+        progress is capped at zero metadata-derived episodes. The refresh is
+        skipped when progress is already known, and failures leave the cached
+        data untouched. A freshly finished series is updated even when AniList
+        no longer reports a next airing episode.
         """
         if (
             not anime.anilist_id
@@ -481,14 +483,24 @@ class AnixoApp(App[None]):
             fresh = await self.api.details(int(anime.anilist_id), refresh=True)
         except Exception:
             return anime
-        if fresh is None or fresh.next_airing_episode is None:
+        if fresh is None:
             return anime
-        anime.next_airing_episode = fresh.next_airing_episode
-        if fresh.status:
+
+        changed = False
+        if (
+            fresh.next_airing_episode is not None
+            and fresh.next_airing_episode != anime.next_airing_episode
+        ):
+            anime.next_airing_episode = fresh.next_airing_episode
+            changed = True
+        if fresh.status and fresh.status != anime.status:
             anime.status = fresh.status
-        if fresh.episodes:
+            changed = True
+        if fresh.episodes and fresh.episodes != anime.episodes:
             anime.episodes = fresh.episodes
-        await asyncio.to_thread(self.database.upsert_anime, anime)
+            changed = True
+        if changed:
+            await asyncio.to_thread(self.database.upsert_anime, anime)
         return anime
 
     async def _provider_results(self, anime: Anime) -> list[Any]:
@@ -569,13 +581,17 @@ class AnixoApp(App[None]):
         ]
         self.open_episode_selector(selected, entries=entries)
 
-    async def watch_anime(self, anime: Anime) -> None:
+    async def watch_anime(
+        self, anime: Anime, *, force_selector: bool = False
+    ) -> None:
         """Route WATCH through ANIXO's own franchise and episode selectors.
 
         Provider results are resolved first so the exact selected season, movie,
-        or special is carried all the way to playback.  ani-cli's interactive
-        picker is never used.  If the provider is unavailable, existing local
-        progress still works; a title with no known provider ID cannot start.
+        or special is carried all the way to playback. ani-cli's interactive
+        picker is never used. ``force_selector`` skips the resume prompt so the
+        Details screen's Select Episode action can browse provider episodes
+        directly. If the provider is unavailable, existing local progress still
+        works; a title with no known provider ID cannot start.
         """
         results = await self._provider_results(anime)
         if results:
@@ -598,7 +614,12 @@ class AnixoApp(App[None]):
                 if remembered_entry:
                     break
 
-            if remembered and remembered.get("episode") and remembered_entry:
+            if (
+                not force_selector
+                and remembered
+                and remembered.get("episode")
+                and remembered_entry
+            ):
                 selected = self._anime_for_provider_entry(anime, remembered_entry)
 
                 async def on_remembered(choice: str | None) -> None:
@@ -637,7 +658,7 @@ class AnixoApp(App[None]):
         states = await asyncio.to_thread(self.database.get_episode_states, anime.id)
         resume_anime = entry.anime if entry else anime
         last = entry.episode if entry else None
-        if not last or is_series_completed(resume_anime, last, states):
+        if force_selector or not last or is_series_completed(resume_anime, last, states):
             if not resume_anime.source_id:
                 self.notify_user(
                     "Provider results are unavailable; exact playback needs a fresh search."

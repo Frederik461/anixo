@@ -20,7 +20,13 @@ from textual.widgets import Button, Input, Static
 
 from components.navigation import Selection
 from components.shell import ShellScreen
-from components.ui import ComposedGrid, EmptyState, SectionHeading, plain_text
+from components.ui import (
+    ComposedGrid,
+    EmptyState,
+    LoadingState,
+    SectionHeading,
+    plain_text,
+)
 from models.anime import Anime
 from models.episode import (
     COMPLETED,
@@ -96,6 +102,7 @@ class EpisodeSelectorScreen(ShellScreen):
         Binding("u", "toggle_audio", "Sub / Dub"),
         Binding("j", "jump", "Jump to episode", show=False),
         Binding("/", "jump", "Jump", show=False),
+        Binding("r", "retry", "Retry episodes", show=False),
         Binding("escape", "back", "Back", show=False),
     ]
 
@@ -115,6 +122,7 @@ class EpisodeSelectorScreen(ShellScreen):
         self._last_tier = ""
         self._loading = False
         self._initialized = False
+        self._source_error: str | None = None
         self._render_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
@@ -183,6 +191,7 @@ class EpisodeSelectorScreen(ShellScreen):
         self.audio = self.app.config.preferred_audio
         self._apply_layout()
         self._render_audio()
+        await self._show_loading()
         await self._load()
         self.query_one("#episode-jump-input", Input).can_focus = True
         # The nav rail is the first focusable widget; clear focus so Enter and
@@ -214,6 +223,13 @@ class EpisodeSelectorScreen(ShellScreen):
         self.selection.page_size = max(1, self._columns() * 4)
         body = self.query_one("#episode-body", Horizontal)
         body.styles.layout = "vertical" if self.has_class("compact") else "horizontal"
+
+    async def _show_loading(self) -> None:
+        """Make the slow metadata/provider lookups visibly in progress."""
+        host = self.query_one("#episode-list", Vertical)
+        await host.remove_children()
+        await host.mount(LoadingState("Loading episodes..."))
+        self.query_one("#episode-page-label", Static).update("Loading episodes...")
 
     # ------------------------------------------------------------------
     # Audio
@@ -250,6 +266,8 @@ class EpisodeSelectorScreen(ShellScreen):
         if self._loading:
             return
         self._loading = True
+        first_load = not self._initialized
+        self._source_error = None
         try:
             self.anime = await self.app.refresh_airing_progress(self.anime)
             entry = await asyncio.to_thread(
@@ -262,7 +280,8 @@ class EpisodeSelectorScreen(ShellScreen):
                         released = await asyncio.to_thread(
                             self.app.provider.episodes, source_id
                         )
-                    except ProviderError:
+                    except ProviderError as error:
+                        self._source_error = f"Provider lookup failed: {error}"
                         released = []
                     if released:
                         self.source_entries = [
@@ -273,6 +292,14 @@ class EpisodeSelectorScreen(ShellScreen):
                             }
                             for episode in released
                         ]
+                    elif not self._source_error:
+                        self._source_error = (
+                            "The provider returned no episodes for this title."
+                        )
+                elif first_load:
+                    self._source_error = (
+                        "No exact provider match is stored for this title."
+                    )
             records = await asyncio.to_thread(
                 self.app.database.get_episode_records, self.anime.id
             )
@@ -300,6 +327,8 @@ class EpisodeSelectorScreen(ShellScreen):
                 self.selection.clamp(len(self.episodes))
             else:
                 self.selection.index = 0
+                if self._source_error and first_load:
+                    self.app.notify_user(self._source_error)
             self._initialized = True
             self._last_tier = self._tier()
             await self._render_page()
@@ -325,10 +354,13 @@ class EpisodeSelectorScreen(ShellScreen):
         await host.remove_children()
         total = len(self.episodes)
         if total == 0:
+            detail = self._source_error or (
+                "Episode information is unavailable for this title."
+            )
             await host.mount(
                 EmptyState(
-                    "Episode information is unavailable for this title. "
-                    "Enter an episode number below to play it directly."
+                    f"{detail} Press R to retry, or enter an episode number below "
+                    "to play it directly."
                 )
             )
             self.query_one("#episode-page-label", Static).update("No episode list")
@@ -385,8 +417,9 @@ class EpisodeSelectorScreen(ShellScreen):
             title.update("")
             status.update("")
             description.update(
-                "The source did not provide an episode list. You can still enter "
-                "an episode number below and play it directly."
+                self._source_error
+                or "The source did not provide an episode list. You can still "
+                "enter an episode number below and play it directly."
             )
             duration.update("")
             previous.disabled = True
@@ -495,6 +528,14 @@ class EpisodeSelectorScreen(ShellScreen):
         episode = self.current_episode
         field.value = episode.number if episode else ""
         field.focus()
+
+    async def action_retry(self) -> None:
+        if self._loading:
+            return
+        await self._show_loading()
+        await self._load()
+        if self.episodes:
+            self.app.notify_user(f"Loaded {len(self.episodes)} episodes.")
 
     def action_back(self) -> None:
         focused = self.focused
