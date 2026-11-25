@@ -37,6 +37,11 @@ from models.episode import (
     grouped_episodes,
     has_groups,
 )
+from services.health_checks import (
+    guard_rows_unchanged,
+    message_with_health,
+    provider_status,
+)
 from services.provider import ProviderError
 
 _SHORTCUTS = (
@@ -268,6 +273,8 @@ class EpisodeSelectorScreen(ShellScreen):
         self._loading = True
         first_load = not self._initialized
         self._source_error = None
+        provider_rows: Sequence[Any] | None = None
+        rows_before: tuple[Any, ...] = ()
         try:
             self.anime = await self.app.refresh_airing_progress(self.anime)
             entry = await asyncio.to_thread(
@@ -283,6 +290,8 @@ class EpisodeSelectorScreen(ShellScreen):
                     except ProviderError as error:
                         self._source_error = f"Provider lookup failed: {error}"
                         released = []
+                    provider_rows = released
+                    rows_before = tuple(released)
                     if released:
                         self.source_entries = [
                             {
@@ -300,6 +309,10 @@ class EpisodeSelectorScreen(ShellScreen):
                     self._source_error = (
                         "No exact provider match is stored for this title."
                     )
+            else:
+                provider_rows = self.source_entries
+                rows_before = tuple(self.source_entries)
+            health = provider_status(rows=provider_rows, error=self._source_error)
             records = await asyncio.to_thread(
                 self.app.database.get_episode_records, self.anime.id
             )
@@ -315,6 +328,13 @@ class EpisodeSelectorScreen(ShellScreen):
                 progress=records,
                 last_episode=last,
             )
+            episodes_before = tuple(self.episodes)
+            # Health data may only decorate messages. Prove that neither the
+            # provider rows nor the built episode rows changed afterwards.
+            self._source_error = message_with_health(self._source_error, health) or None
+            if provider_rows is not None:
+                guard_rows_unchanged(rows_before, provider_rows)
+            guard_rows_unchanged(episodes_before, self.episodes)
             if self.episodes:
                 if not self._initialized:
                     initial = 0

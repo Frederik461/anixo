@@ -11,6 +11,11 @@ from typing import Any, Mapping
 
 from config import Config
 from services.dependencies import diagnostics as dependency_diagnostics
+from services.health_checks import (
+    from_diagnostic_lines,
+    health_lines,
+    network_status,
+)
 from services.setup import check_network
 from services.terminal import resolve_renderer
 
@@ -55,6 +60,7 @@ def build_report(
     ani_cli: Any,
     capabilities: Any,
     cache_counts: Mapping[str, int],
+    network_ok: bool | None = None,
 ) -> str:
     """Build a complete, redacted plain-text environment report."""
     dependency_lines = [str(line) for line in dependency_diagnostics(config, ani_cli)]
@@ -127,7 +133,13 @@ def build_report(
     add("Cell size:", f"{width}x{height} px")
 
     section("Network")
-    add("AniList API:", "reachable" if check_network() else "unreachable")
+    reachable = check_network() if network_ok is None else bool(network_ok)
+    add("AniList API:", "reachable" if reachable else "unreachable")
+
+    section("Health checks")
+    checks = (*from_diagnostic_lines(dependency_lines), network_status(reachable))
+    for line in health_lines(checks):
+        report.append(_redact(line))
 
     section("Cache")
     if cache_counts:

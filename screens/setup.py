@@ -12,6 +12,7 @@ from textual.widgets import Button, Static
 
 from components.shell import ShellScreen
 from components.ui import SectionHeading, plain_text
+from services.health_checks import from_dependency_statuses, health_lines
 from services.setup import DependencyStatus, SetupSnapshot
 
 _STEP_COUNT = 6
@@ -214,6 +215,9 @@ class SetupScreen(ShellScreen):
                 f"Renderer: {snapshot.renderer}",
                 f"Network: {'online' if snapshot.network_ok else 'offline'}",
                 f"Legacy data: {legacy}",
+                "",
+                "Health checks:",
+                *health_lines(from_dependency_statuses(snapshot.dependencies)),
             ]
         elif index in (2, 3):
             lines = []
