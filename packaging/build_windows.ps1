@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Builds and validates the complete Windows release of ANIXO v0.1.0-beta.3.
+    Builds and validates the complete Windows release of ANIXO v0.1.0-beta.4.
 
 .DESCRIPTION
     Run from the repository root (the script also resolves its own root):
@@ -18,7 +18,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $Version = '0.1.0-beta.3',
+    [string] $Version = '0.1.0-beta.4',
     [string] $RepoRoot = '',
     [switch] $SkipTests,
     [switch] $SkipInstaller,
