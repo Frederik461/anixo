@@ -813,8 +813,8 @@ class AnixoApp(App[None]):
     # ------------------------------------------------------------------
     # Shared actions / services
 
-    def notify_user(self, message: str) -> None:
-        self.notify(message, timeout=3)
+    def notify_user(self, message: str, *, timeout: float = 3) -> None:
+        self.notify(message, timeout=timeout)
 
     async def confirm(self, title: str, message: str = "") -> bool:
         """Show a confirmation modal. Call this from a Textual worker.
@@ -1308,6 +1308,7 @@ class AnixoApp(App[None]):
         state.busy = False
         if check.error:
             self._set_update_status(f"UPDATE FAILED — {check.error}", error=check.error)
+            self.notify_user(self.update_state.status, timeout=10)
         elif check.update_available:
             self._set_update_status(f"UPDATE AVAILABLE — ANIXO {check.available}")
             self.notify_user(self.update_state.status)
@@ -1358,10 +1359,11 @@ class AnixoApp(App[None]):
                 self._set_update_status("UPDATE FAILED — download cancelled.", busy=False)
                 state.can_cancel = False
                 return
-            except (OSError, ValueError) as error:
-                self._set_update_status(
-                    f"UPDATE FAILED — {error}", error=str(error), busy=False
-                )
+            except Exception as error:
+                status = f"UPDATE FAILED — {error}"
+                self.updates.log.log("prepare_failed", error=str(error))
+                self._set_update_status(status, error=str(error), busy=False)
+                self.notify_user(status, timeout=10)
                 state.can_cancel = False
                 return
             state.prepared = prepared
@@ -1393,10 +1395,12 @@ class AnixoApp(App[None]):
             self.notify_user("There is no verified update waiting to be installed.")
             return
         if not self.updates.launch_helper(prepared.plan_path):
+            status = "UPDATE FAILED — updater helper could not be started."
             self._set_update_status(
-                "UPDATE FAILED — updater helper could not be started.",
+                status,
                 error="ANIXO-Updater was not found.",
             )
+            self.notify_user(status, timeout=10)
             return
         self.update_state.restart_required = False
         self._set_update_status("INSTALLING — ANIXO will restart…", busy=True)

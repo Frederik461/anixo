@@ -463,6 +463,22 @@ def validate_package(path: Path, asset: ReleaseAsset, target: PlatformTarget) ->
     name = asset.name.lower()
     if name.endswith(".exe"):
         machine = _pe_machine(package)
+        installer = (
+            str(getattr(asset, "kind", "")).lower() == "installer"
+            or name.startswith("anixo-setup-")
+            or "setup" in name
+        )
+        if installer:
+            # Inno Setup's launcher is 32-bit even for an x64 application, so
+            # its PE machine type does not describe the installed app's arch.
+            # The asset name/platform still carries the target architecture.
+            if target.system != "windows":
+                raise ValueError("A Windows installer cannot update a non-Windows target.")
+            if target.arch == "arm64" and machine != "arm64":
+                raise ValueError(
+                    f"Windows installer architecture {machine} does not match {target.arch}."
+                )
+            return "PE installer verified"
         if machine != target.arch:
             raise ValueError(
                 f"Windows asset architecture {machine} does not match {target.arch}."
@@ -711,7 +727,12 @@ class UpdateService:
             },
         ) as client:
             response = await client.get(url)
-            if response.status_code in {401, 403, 404}:
+            if response.status_code == 403:
+                raise ValueError(
+                    "GitHub rate-limited the update check. Try again in a few "
+                    "minutes or configure a public update feed URL in Settings → Updates."
+                )
+            if response.status_code in {401, 404}:
                 raise ValueError(
                     "The update source is not publicly readable. Configure a "
                     "public update feed URL in Settings → Updates."

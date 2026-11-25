@@ -20,7 +20,7 @@ been tested. Intel Mac builds are not published until independently tested.
 | Check | Result |
 | --- | --- |
 | `uv lock --check` | PASS — frozen lock resolves. |
-| `python -m pytest -q` | PASS — **280 passed** on real Windows on 2026-11-25 after the episode-loading fix; **280 passed** on both GitHub-hosted macOS runners during the successful `v0.1.0-beta.4` release workflow. Earlier macOS checks were `202 passed, 1 skipped` (Windows-only cmd-wrapper test). |
+| `python -m pytest -q` | PASS — **281 passed** on real Windows on 2026-11-25 after the updater fix; **280 passed** on both GitHub-hosted macOS runners during the successful `v0.1.0-beta.4` release workflow. Earlier macOS checks were `202 passed, 1 skipped` (Windows-only cmd-wrapper test). |
 | `python -m compileall` / `py_compile` over source, services, platforms, screens, tests | PASS — no syntax errors. |
 | `uninstaller.py --version` / `--help` | PASS — standalone CLI starts and lists all options. |
 | `assets/make_icons.py` | PASS — ICO files contain 16/32/48/64/128/256 px frames and `anixo.png` source for `.icns`. |
@@ -96,6 +96,17 @@ been tested. Intel Mac builds are not published until independently tested.
 | Provider lookup failures | FIXED — failures are shown in the episode list instead of being silently converted to an empty page. The list shows a visible loading state, an actionable error message, and an `R` retry path; direct numeric playback still works. |
 | Automated coverage | PASS — new tests cover stale-to-finished metadata, resolved provider browsing without a resume prompt, provider failure messaging, and retry recovery. |
 | macOS compatibility of this fix | PASS — the `v0.1.0-beta.4` tagged workflow ran the same 280-test suite on both GitHub-hosted macOS runners and all build/publish jobs succeeded. |
+
+## In-app updater fix (2026-11-25)
+
+| Check | Result |
+| --- | --- |
+| Root cause | FOUND — the Windows installer is built by Inno Setup, whose launcher PE reports `x86` even for an x64 application. The updater rejected the verified setup executable with `Windows asset architecture x86 does not match x86_64` after the download had already passed checksum verification. |
+| Installer validation | FIXED — setup/installer executables are still checked as valid PE files and still constrained to the correct platform, but their 32-bit launcher architecture is no longer mistaken for the installed app architecture. Portable and updater-helper executables remain strict about exact architecture. |
+| Error visibility | FIXED — prepare and helper-launch failures are written to `update.log` and shown for 10 seconds instead of a brief 3-second notification. HTTP 403 is reported as a rate-limit with a retry suggestion instead of a misleading private-repository message. |
+| Reproduced failure | PASS — replaying the cached public release through the old validation produced the exact `x86 does not match x86_64` error; after the fix the same release prepared successfully with a verified plan and helper path. |
+| Automated coverage | PASS — `pytest -q tests/test_updates.py tests/test_app.py` → **42 passed**; full suite → **281 passed in 252.38s**. New tests cover a 32-bit Inno Setup launcher, strict helper architecture checking, and HTTP 403 messaging. |
+| Installed beta.3 self-update | BLOCKED until a new build is installed manually — the validation bug lives in the already installed client, so a release published afterward cannot repair that client through its own update button. Future in-app updates work from the fixed build onward. |
 
 ## Episode-release, mouse, and performance work (2026-11-24)
 

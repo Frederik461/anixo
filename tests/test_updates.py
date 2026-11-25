@@ -169,6 +169,31 @@ class _FakeAsyncClient:
         return _FakeStream(self.body)
 
 
+class _FakeJsonResponse:
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> list[Any]:
+        return []
+
+
+class _FakeJsonClient:
+    def __init__(self, status_code: int) -> None:
+        self.response = _FakeJsonResponse(status_code)
+
+    async def __aenter__(self) -> "_FakeJsonClient":
+        return self
+
+    async def __aexit__(self, *args: Any) -> bool:
+        return False
+
+    async def get(self, url: str) -> _FakeJsonResponse:
+        return self.response
+
+
 def _ani_cli_source(marker: bytes = b"v5.1") -> bytes:
     search = '        anime_list=$(hianime_search "$query") || exit 1\n'
     menu = 'dep_ch "$menu_program" # TODO: use dep_ch_failover to iterate through options\n'
@@ -411,6 +436,21 @@ def test_check_private_repository_gives_actionable_error(tmp_path: Path, monkeyp
     assert check.release is None
 
 
+def test_fetch_json_rate_limit_is_actionable(tmp_path: Path, monkeypatch) -> None:
+    service = _service(tmp_path)
+    monkeypatch.setattr(
+        updater_module.httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: _FakeJsonClient(403),
+    )
+    with pytest.raises(ValueError, match="rate-limited"):
+        asyncio.run(
+            service._fetch_json(
+                "https://api.github.com/repos/example/repo/releases"
+            )
+        )
+
+
 def test_public_feed_manifest_is_used(tmp_path: Path, monkeypatch) -> None:
     feed = "https://cdn.example.test/manifest.json"
     service = _service(tmp_path, feed=feed)
@@ -517,9 +557,22 @@ def test_validate_package_checks_architecture_and_structure(tmp_path: Path) -> N
 
     setup = tmp_path / "setup.exe"
     setup.write_bytes(_fake_pe(0x8664))
-    assert "architecture verified" in validate_package(setup, _asset("setup.exe"), win)
+    assert "installer verified" in validate_package(setup, _asset("setup.exe"), win)
     with pytest.raises(ValueError, match="does not match"):
         validate_package(setup, _asset("setup.exe"), detect_target("Windows", "arm64"))
+
+    # Inno Setup launchers are 32-bit even when they install the x64 app.
+    launcher = tmp_path / "setup-launcher.exe"
+    launcher.write_bytes(_fake_pe(0x14C))
+    assert "installer verified" in validate_package(
+        launcher, _asset("ANIXO-Setup-v1.2.0.exe"), win
+    )
+
+    # Non-installer executables still have to match the target architecture.
+    helper = tmp_path / "helper.exe"
+    helper.write_bytes(_fake_pe(0x14C))
+    with pytest.raises(ValueError, match="does not match"):
+        validate_package(helper, _asset("ANIXO-Updater-windows-x64.exe"), win)
 
     portable = tmp_path / "portable.zip"
     portable.write_bytes(_zip_bytes({"ANIXO/Anixo.exe": b"MZ"}))
