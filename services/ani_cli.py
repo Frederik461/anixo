@@ -45,15 +45,38 @@ _MENU_REPLACEMENT = (
 )
 
 
+class AniCliPatchError(ValueError):
+    """The verified ani-cli source no longer matches ANIXO's exact-ID patch."""
+
+    def __init__(self, message: str = "", *, missing_anchors: tuple[str, ...] = ()) -> None:
+        self.missing_anchors = tuple(missing_anchors)
+        if not message:
+            detail = ", ".join(self.missing_anchors) or "unknown anchor"
+            message = (
+                "ani-cli patch is out of date for this ani-cli version "
+                f"(missing {detail})"
+            )
+        super().__init__(message)
+
+
 def patch_exact_provider_selection(source: str) -> str:
     """Apply the tiny exact-ID patch to a verified official ani-cli script."""
     source = source.replace("\r\n", "\n").replace("\r", "\n")
-    if _SEARCH_ANCHOR not in source or _MENU_ANCHOR not in source:
-        raise ValueError("The installed ani-cli version cannot be patched safely.")
+    missing: list[str] = []
+    if _SEARCH_ANCHOR not in source:
+        missing.append("search anchor")
+    if _MENU_ANCHOR not in source:
+        missing.append("menu anchor")
+    if missing:
+        raise AniCliPatchError(missing_anchors=tuple(missing))
     patched = source.replace(_SEARCH_ANCHOR, _SEARCH_ANCHOR + _EXACT_FILTER, 1)
     patched = patched.replace(_MENU_ANCHOR, _MENU_REPLACEMENT, 1)
     if _EXACT_MARKER not in patched:
-        raise ValueError("The exact provider selection patch was not applied.")
+        raise AniCliPatchError(
+            "ani-cli patch is out of date for this ani-cli version "
+            "(exact marker was not applied)",
+            missing_anchors=("exact marker",),
+        )
     return patched
 
 
@@ -481,6 +504,40 @@ class AniCliService:
             environment["ANI_CLI_NO_DETACH"] = "1"
         return environment
 
+    def exact_arguments(
+        self,
+        *,
+        title: str | None = None,
+        source_id: str | None = None,
+        episode: str | None = None,
+        resume: bool = False,
+        dub: bool = False,
+        exact: bool = False,
+        provider_id: str | None = None,
+    ) -> list[str] | None:
+        """Build the real argument list for one playback request.
+
+        ``None`` means the request is refused before any process is created:
+        exact playback without a provider ID would let ani-cli open its picker.
+        The dev pin checker uses this same builder for its assertions.
+        """
+        if exact and not resume and not provider_id:
+            return None
+        arguments: list[str] = []
+        if resume:
+            arguments.append("-c")
+        else:
+            arguments.append(title or provider_id or source_id or "")
+            if provider_id:
+                arguments.extend(["-S", "1"])
+        if dub:
+            arguments.append("--dub")
+        if episode and not resume:
+            arguments.extend(["-e", str(episode)])
+        if exact and self.supports_exit_after_play():
+            arguments.append("--exit-after-play")
+        return arguments
+
     async def spawn(
         self,
         *,
@@ -503,9 +560,16 @@ class AniCliService:
         invocation = self.resolve_invocation()
         if not invocation:
             return None
-        if exact and not resume and not provider_id:
-            # A title-only search would put ani-cli back in charge of result
-            # selection. Exact playback must always name the provider result.
+        arguments = self.exact_arguments(
+            title=title,
+            source_id=source_id,
+            episode=episode,
+            resume=resume,
+            dub=dub,
+            exact=exact,
+            provider_id=provider_id,
+        )
+        if arguments is None:
             return None
         if provider_id and not resume:
             script = self.exact_script()
@@ -516,19 +580,6 @@ class AniCliService:
                 return None
             invocation = exact_invocation
 
-        arguments: list[str] = []
-        if resume:
-            arguments.append("-c")
-        else:
-            arguments.append(title or provider_id or source_id or "")
-            if provider_id:
-                arguments.extend(["-S", "1"])
-        if dub:
-            arguments.append("--dub")
-        if episode and not resume:
-            arguments.extend(["-e", str(episode)])
-        if exact and self.supports_exit_after_play():
-            arguments.append("--exit-after-play")
         command = self.command_arguments(invocation, arguments)
         try:
             return await asyncio.create_subprocess_exec(

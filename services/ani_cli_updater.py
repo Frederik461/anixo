@@ -28,10 +28,14 @@ import httpx
 from config import Config, default_cache_dir
 from platforms import PlatformAdapter, get_platform_adapter
 from services import setup as setup_service
-from services.ani_cli import AniCliService, patch_exact_provider_selection
+from services.ani_cli import (
+    AniCliPatchError,
+    AniCliService,
+    patch_exact_provider_selection,
+)
 from services.dependency_manager import DependencyManager
 from services.install_manifest import COMPONENT_ANI_CLI
-from services.update_log import UpdateLog
+from services.update_log import UpdateLog, redact_update_text
 from services.updater import _version_key, parse_version
 
 # Derived from ANI_CLI_URL = raw.githubusercontent.com/pystardust/ani-cli/v5.1/ani-cli
@@ -70,6 +74,7 @@ class AniCliInstalled:
     owned_by_anixo: bool
     health: str
     detail: str
+    patch_error: str = ""
 
     @property
     def installed(self) -> bool:
@@ -204,11 +209,13 @@ class AniCliUpdateService:
             version = record.version or "recorded revision"
         if not version:
             version = f"unknown ({digest[:10]})"
+        patch_error = ""
         try:
             patch_exact_provider_selection(payload.decode("utf-8"))
             patch_ok = True
-        except (UnicodeDecodeError, ValueError):
+        except (AniCliPatchError, UnicodeDecodeError, ValueError) as error:
             patch_ok = False
+            patch_error = redact_update_text(str(error))
         if digest in _KNOWN_REVISIONS:
             health = "verified official revision"
         elif owned:
@@ -218,10 +225,12 @@ class AniCliUpdateService:
         detail = (
             f"Script: {path}\nSHA256: {digest}\n"
             f"Owner: {'ANIXO' if owned else 'user or another installer'}\n"
-            f"Exact-provider patch: {'compatible' if patch_ok else 'unavailable'}"
+            f"Exact-provider patch: {'compatible' if patch_ok else 'out of date'}"
         )
+        if patch_error:
+            detail += f"\nPatch detail: {patch_error}"
         return AniCliInstalled(
-            str(path), version, digest[:12], digest, owned, health, detail
+            str(path), version, digest[:12], digest, owned, health, detail, patch_error
         )
 
     def _read_cache(self) -> AniCliUpdateCheck | None:
@@ -425,9 +434,10 @@ class AniCliUpdateService:
                 patch_exact_provider_selection(
                     staged_script.read_text(encoding="utf-8")
                 )
-            except (OSError, UnicodeDecodeError, ValueError) as error:
-                raise ValueError(
-                    "The candidate cannot be patched for exact provider selection."
+            except (AniCliPatchError, OSError, UnicodeDecodeError, ValueError) as error:
+                raise AniCliPatchError(
+                    "ani-cli patch is out of date for this ani-cli version; "
+                    "the candidate cannot be patched safely."
                 ) from error
 
             if progress:
@@ -460,7 +470,13 @@ class AniCliUpdateService:
             final_path = Path(final.install_location)
             if _digest(final_path.read_bytes()) != str(check.expected_sha256).upper():
                 raise ValueError("Post-install checksum verification failed.")
-            patch_exact_provider_selection(final_path.read_text(encoding="utf-8"))
+            try:
+                patch_exact_provider_selection(final_path.read_text(encoding="utf-8"))
+            except (AniCliPatchError, OSError, UnicodeDecodeError, ValueError) as error:
+                raise AniCliPatchError(
+                    "ani-cli patch is out of date for this ani-cli version; "
+                    "the installed candidate could not be verified."
+                ) from error
             self._manager().record_ani_cli_update(
                 version=check.latest_version,
                 source=check.asset_url,

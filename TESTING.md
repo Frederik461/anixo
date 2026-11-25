@@ -320,3 +320,17 @@ On a **clean macOS 13+ arm64 Mac**:
 5. Test both uninstall modes and confirm that Apple Silicon paths under
    `~/Library` are handled correctly.
 6. Record the signing/notarization result before publishing release notes.
+
+## Design only — signed `ani_cli_pin` delivery (not implemented)
+
+A future signed release manifest may add an `ani_cli_pin` section containing:
+the official source URL, the source SHA-256, a patch identifier, the SHA-256 of
+the patch applied by `patch_exact_provider_selection()`, and the compatible
+ANIXO version range. It would be verified with the existing `update_public_key`
+mechanism before any candidate is staged or executed. If the patch does not
+apply cleanly or the digest differs, the app must fail closed with the typed
+`AniCliPatchError` message, never open ani-cli's picker, never run `ani-cli -U`,
+and never launch an unpatched script for exact playback. Ownership must be
+recorded through the existing install manifest, and a user-managed ani-cli must
+never be overwritten. **This section is design only; no delivery code is part
+of Phase C.**
