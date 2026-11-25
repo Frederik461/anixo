@@ -8,6 +8,7 @@ in-memory fakes.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -15,10 +16,15 @@ import pytest
 
 from config import Config
 from services import release_manager as rm
+from version import VERSION as CURRENT
 
-CURRENT = "0.1.0-beta.2"
-NEXT_BETA = "0.1.0-beta.2"
-STABLE = "0.1.0"
+_CURRENT_PARTS = rm.parse_release_version(CURRENT)
+NEXT_BETA = (
+    rm.target_version(CURRENT, "beta")
+    if _CURRENT_PARTS.is_prerelease
+    else f"{_CURRENT_PARTS.base}-beta.{_CURRENT_PARTS.number + 1}"
+)
+STABLE = _CURRENT_PARTS.base
 TOKEN = "Frederik461/anixo"
 
 
@@ -32,7 +38,10 @@ def _files(root: Path) -> dict[str, str]:
             'VersionInfoProductVersion=0.1.0.0\n'
             'VersionInfoVersion=0.1.0.0\n'
         ),
-        "uv.lock": '[[package]]\nname = "anixo"\nversion = "0.1.0b2"\n',
+        "uv.lock": (
+            '[[package]]\nname = "anixo"\n'
+            f'version = "{rm.normalized_version(CURRENT)}"\n'
+        ),
         ".github/workflows/release.yml": (
             "name: Release ANIXO\n"
             "on:\n  push:\n    tags:\n      - 'v*'\n"
@@ -47,7 +56,7 @@ def _files(root: Path) -> dict[str, str]:
         "packaging/validate_build.ps1": f"[string] $Version = '{CURRENT}'\n",
         "packaging/build_macos.sh": f'VERSION="${{1:-{CURRENT}}}"\n',
         "packaging/make_release_manifest.py": "print('generator')\n",
-        "packaging/validate_macos_runtime.py": "VERSION = '0.1.0-beta.2'\n",
+        "packaging/validate_macos_runtime.py": f"VERSION = '{CURRENT}'\n",
         "README.md": f"Current release {CURRENT} is available.\n",
         "anixo.spec": "spec\n",
         "anixo_macos.spec": "spec\n",
@@ -249,11 +258,11 @@ class FakeRunner:
         if key[:3] == ("gh", "release", "list"):
             payload = [
                 {
-                    "tagName": "v0.1.0-beta.2",
-                    "name": "ANIXO v0.1.0-beta.2",
-                    "isPrerelease": True,
+                    "tagName": f"v{CURRENT}",
+                    "name": f"ANIXO v{CURRENT}",
+                    "isPrerelease": CURRENT != STABLE,
                     "publishedAt": "2026-11-25T00:00:00Z",
-                    "url": "https://github.com/Frederik461/anixo/releases/tag/v0.1.0-beta.2",
+                    "url": f"https://github.com/{TOKEN}/releases/tag/v{CURRENT}",
                 }
             ]
             return rm.CommandResult(key, 0, json.dumps(payload), "")
@@ -301,7 +310,7 @@ def test_release_version_targets() -> None:
     assert rm.target_version(CURRENT, "stable") == STABLE
     assert rm.channel_for_version(NEXT_BETA) == "beta"
     assert rm.channel_for_version(STABLE) == "stable"
-    assert rm.normalized_version(NEXT_BETA) == "0.1.0b2"
+    assert rm.normalized_version(NEXT_BETA) == f"{STABLE}b{NEXT_BETA.rsplit('.', 1)[-1]}"
     assert rm.parse_release_version(CURRENT).label == "beta"
 
     with pytest.raises(rm.ReleaseError):
@@ -321,8 +330,8 @@ def test_version_references_are_discovered_validated_and_updated(tmp_path: Path)
 
     changed = rm.apply_version_references(root, CURRENT, NEXT_BETA, references)
     assert set(changed) == set(references)
-    assert b'__version__ = "0.1.0-beta.2"\r\n' in (root / "version.py").read_bytes()
-    assert 'version = "0.1.0b2"' in (root / "uv.lock").read_text(encoding="utf-8")
+    assert f'__version__ = "{NEXT_BETA}"\r\n'.encode("utf-8") in (root / "version.py").read_bytes()
+    assert rm.normalized_version(NEXT_BETA) in (root / "uv.lock").read_text(encoding="utf-8")
     assert (root / "README.md").read_bytes().count(b"\r\n") > 0
     rm.validate_versions(root, NEXT_BETA, tracked_files=tracked)
 
@@ -433,7 +442,7 @@ def test_beta_release_publishes_only_through_workflow(tmp_path: Path) -> None:
     assert manager.run_release("beta") == 0
 
     assert f'__version__ = "{NEXT_BETA}"' in (root / "version.py").read_text(encoding="utf-8")
-    assert 'version = "0.1.0b2"' in (root / "uv.lock").read_text(encoding="utf-8")
+    assert rm.normalized_version(NEXT_BETA) in (root / "uv.lock").read_text(encoding="utf-8")
     assert ("git", "commit", "-m", f"Release v{NEXT_BETA}") in runner.calls
     assert ("git", "push", "origin", "main") in runner.calls
     assert ("git", "tag", "-a", f"v{NEXT_BETA}", "-m", f"ANIXO {NEXT_BETA}") in runner.calls
@@ -533,7 +542,7 @@ def test_verification_rejects_checksum_mismatch(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     release = _release_json(NEXT_BETA)
     for asset in release["assets"]:
-        if asset["name"] == "ANIXO-Setup-v0.1.0-beta.2.exe":
+        if asset["name"] == f"ANIXO-Setup-v{NEXT_BETA}.exe":
             asset["digest"] = "sha256:" + "cd" * 32
     runner = FakeRunner(root, version=NEXT_BETA, release_json=release)
     manager = _manager(root, runner, version=NEXT_BETA)
@@ -576,3 +585,37 @@ def test_printer_falls_back_on_cp1252_encoding_error(tmp_path: Path) -> None:
     manager._print("unicode \u2192 fallback")
 
     assert captured == ["plain line", "unicode ? fallback"]
+
+
+def test_release_workflow_version_check_matches_version_py() -> None:
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    source = (root / "version.py").read_text(encoding="utf-8")
+
+    pattern = re.search(r"\$source -notmatch '([^']+)'", workflow)
+    assert pattern, "release workflow no longer checks version.py"
+    found = re.search(pattern.group(1), source)
+    assert found is not None
+    assert found.group(1) == CURRENT
+
+
+def test_workflow_discovery_retries_until_tagged_run_appears(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    delegate = FakeRunner(root, workflow_tag=f"v{NEXT_BETA}")
+    list_calls = 0
+
+    class _DelayedRunRunner:
+        def __call__(self, command: list[str], **kwargs: Any) -> rm.CommandResult:
+            nonlocal list_calls
+            if tuple(command[:3]) == ("gh", "run", "list"):
+                list_calls += 1
+                if list_calls <= 2:
+                    return rm.CommandResult(tuple(command), 0, "[]", "")
+            return delegate(command, **kwargs)
+
+    manager = _manager(root, _DelayedRunRunner(), version=NEXT_BETA)
+    run = manager._find_workflow_run(f"v{NEXT_BETA}", attempts=5, delay=0)
+
+    assert run is not None
+    assert run.head_branch == f"v{NEXT_BETA}"
+    assert list_calls == 3

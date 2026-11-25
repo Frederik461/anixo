@@ -20,7 +20,7 @@ been tested. Intel Mac builds are not published until independently tested.
 | Check | Result |
 | --- | --- |
 | `uv lock --check` | PASS — frozen lock resolves. |
-| `python -m pytest -q` | PASS — **275 passed** on real Windows on 2026-11-25 after the release-manager work (251 after the update work); **202 passed, 1 skipped** on both GitHub-hosted macOS runners at the earlier release check (the skip is the Windows-only cmd-wrapper integration test). The newer mouse, update, release-manifest, and release-manager tests have not been run on macOS. |
+| `python -m pytest -q` | PASS — **277 passed** on real Windows on 2026-11-25 after the release-manager work (251 after the update work); **202 passed, 1 skipped** on both GitHub-hosted macOS runners at the earlier release check (the skip is the Windows-only cmd-wrapper integration test). The newer mouse, update, release-manifest, and release-manager tests have not been run on macOS. |
 | `python -m compileall` / `py_compile` over source, services, platforms, screens, tests | PASS — no syntax errors. |
 | `uninstaller.py --version` / `--help` | PASS — standalone CLI starts and lists all options. |
 | `assets/make_icons.py` | PASS — ICO files contain 16/32/48/64/128/256 px frames and `anixo.png` source for `.icns`. |
@@ -71,17 +71,20 @@ been tested. Intel Mac builds are not published until independently tested.
 
 | Check | Result |
 | --- | --- |
-| `pytest -q tests/test_release_manager.py` | PASS — 16 passed. |
-| `pytest -q tests/test_cli.py tests/test_release_manager.py` | PASS — 24 passed; existing CLI parsing/install/version tests unchanged. |
-| `pytest -q` | PASS — **275 passed in 136.27s** on Windows 11, Python 3.12.10 after the release-manager work. |
+| `pytest -q tests/test_release_manager.py` | PASS — 22 passed. |
+| `pytest -q tests/test_cli.py tests/test_release_manager.py` | PASS — 30 passed; existing CLI parsing/install/version tests unchanged. |
+| `pytest -q` | PASS — **277 passed in 137.43s** on Windows 11, Python 3.12.10 after the release-manager work. |
 | `compileall -q main.py config.py version.py services updater_helper.py screens packaging/make_release_manifest.py` | PASS — no syntax errors. |
 | Git/gh/HTTP isolation | PASS — injected runner, confirmer, fetcher, head fetcher, clock, and sleep fakes; no token value is printed. |
 | Release repository resolution with maintainer config | PASS — with `update_repo=fred8/anixo`, the manager resolved `origin` → `frederik461/anixo` and `gh` authentication passed. |
+| Failed beta.2 workflow | ANALYZED — Windows failed because the workflow's `version.py` regex did not match `__version__ = "..."`. Both macOS jobs failed because release-version bumping rewrote hardcoded test constants (including a beta counter expected as a tuple integer), so version-sensitive tests now derive from `version.VERSION` or use fixed non-product fixtures. No tag was deleted or recreated. |
+| Workflow-run discovery | FIXED — tagged-run lookup retries for GitHub's short registration delay instead of failing immediately after pushing the tag. |
+| Release workflow version check | FIXED — `.github/workflows/release.yml` now matches the real `__version__ = "..."` declaration, with a test that reads both real files. |
 | Piped-console release output | FIXED — release output is ASCII-only with a cp1252 fallback, so automated `yes`-piped runs cannot fail on Unicode before preflight. |
 | Local packaging preflight | FIXED — stale/partial `dist/release/SHA256SUMS.txt` is now `NOT TESTED`, not a mandatory failure; CI rebuilds and verifies the published assets from the new tag. |
 | Update-screen initial button state flake | FIXED — `test_update_screen_buttons_are_mouse_and_keyboard_accessible` now waits for the async mount state instead of asserting after one `pilot.pause()`. |
 | Existing Textual timing flake | FIXED — `test_watch_without_history_opens_selector` now waits for the exclusive watch worker's screen state instead of relying on one `pilot.pause()` under full-suite load. |
-| Real GitHub tag, workflow run, and published release | NOT TESTED — no tag or release has been created for a release-manager-published version. `Anixo release check` is the resume path once one exists. |
+| Real GitHub tag, workflow run, and published release | PARTIAL — the release manager pushed its first beta tag and produced run `45666348360`; all build jobs failed before publishing, so no GitHub Release/assets exist. That tag was intentionally left in place. The next sequential beta tag must be published after the fixes; only a successful tagged run can verify assets. |
 
 ## Episode-release, mouse, and performance work (2026-11-24)
 

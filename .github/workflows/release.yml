@@ -44,7 +44,7 @@ jobs:
         run: |
           $expected = $env:APP_VERSION
           $source = Get-Content version.py -Raw
-          if ($source -notmatch 'VERSION\s*=\s*"([^"]+)"') { throw 'Cannot read version.py.' }
+          if ($source -notmatch '__version__\s*=\s*"([^"]+)"') { throw 'Cannot read version.py.' }
           $sourceVersion = $Matches[1]
           $pyproject = Get-Content pyproject.toml -Raw
           if ($pyproject -notmatch '(?m)^version\s*=\s*"([^"]+)"') { throw 'Cannot read pyproject.toml.' }

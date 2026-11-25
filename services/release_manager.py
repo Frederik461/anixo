@@ -1082,36 +1082,47 @@ class ReleaseManager:
     # ------------------------------------------------------------------
     # Workflow monitoring
 
-    def _find_workflow_run(self, tag: str) -> WorkflowRun | None:
+    def _find_workflow_run(self, tag: str, *, attempts: int = 12, delay: float = 5.0) -> WorkflowRun | None:
+        """Find the exact tagged run, allowing GitHub a moment to register it."""
         workflow_name = Path(self.workflow_rel).name
-        result = self._gh(
-            "run",
-            "list",
-            "--repo",
-            self.repo,
-            "--workflow",
-            workflow_name,
-            "--event",
-            "push",
-            "--limit",
-            "100",
-            "--json",
-            "databaseId,status,conclusion,headBranch,displayTitle,url,createdAt",
-        )
-        if not result.ok:
-            self._print(f"[UNKNOWN] Could not list workflow runs: {_safe_detail(result.stderr)}")
-            return None
-        try:
-            payload = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            self._print("[UNKNOWN] Workflow run list was not valid JSON.")
-            return None
-        candidates = [WorkflowRun.from_payload(item) for item in payload if isinstance(item, dict)]
-        exact = [item for item in candidates if item.head_branch == tag]
-        if exact:
-            return sorted(exact, key=lambda item: item.id, reverse=True)[0]
-        titled = [item for item in candidates if tag in item.title]
-        return sorted(titled, key=lambda item: item.id, reverse=True)[0] if titled else None
+        last_problem = ""
+        for attempt in range(max(1, attempts)):
+            result = self._gh(
+                "run",
+                "list",
+                "--repo",
+                self.repo,
+                "--workflow",
+                workflow_name,
+                "--event",
+                "push",
+                "--limit",
+                "100",
+                "--json",
+                "databaseId,status,conclusion,headBranch,displayTitle,url,createdAt",
+            )
+            if not result.ok:
+                last_problem = f"Could not list workflow runs: {_safe_detail(result.stderr)}"
+            else:
+                try:
+                    payload = json.loads(result.stdout)
+                    candidates = [
+                        WorkflowRun.from_payload(item) for item in payload if isinstance(item, dict)
+                    ]
+                except json.JSONDecodeError:
+                    last_problem = "Workflow run list was not valid JSON."
+                else:
+                    exact = [item for item in candidates if item.head_branch == tag]
+                    if exact:
+                        return sorted(exact, key=lambda item: item.id, reverse=True)[0]
+                    titled = [item for item in candidates if tag in item.title]
+                    if titled:
+                        return sorted(titled, key=lambda item: item.id, reverse=True)[0]
+                    last_problem = f"No run found for {tag} yet."
+            if attempt + 1 < max(1, attempts):
+                self._sleep(delay)
+        self._print(f"[UNKNOWN] {last_problem}")
+        return None
 
     def _refresh_workflow_run(self, run: WorkflowRun) -> WorkflowRun:
         result = self._gh(
