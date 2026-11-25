@@ -106,3 +106,22 @@ def test_config_round_trip_preserves_aliases(tmp_path: Path) -> None:
     assert raw["ani_cli_history_path"] == "C:\\history\\ani-hsts"
     assert raw["artwork_renderer"] == "off"
     assert store.load().artwork_renderer == "off"
+
+
+def test_release_settings_parse_aliases_and_normalize_timeout() -> None:
+    config = Config.from_mapping(
+        {
+            "releaseBranch": "release/next",
+            "releaseRemote": "upstream",
+            "releaseWorkflow": ".github/workflows/custom-release.yml",
+            "releaseTimeoutMinutes": "999",
+        }
+    )
+
+    assert config.release_branch == "release/next"
+    assert config.release_remote == "upstream"
+    assert config.release_workflow == ".github/workflows/custom-release.yml"
+    assert config.release_timeout_minutes == 180
+
+    config.release_timeout_minutes = "invalid"
+    assert config.release_timeout_minutes == 45

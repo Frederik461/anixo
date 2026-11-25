@@ -267,6 +267,11 @@ def _host_allowed(url: str, trusted_hosts: set[str]) -> bool:
     return any(host.endswith(suffix) for suffix in _GITHUB_HOST_SUFFIXES)
 
 
+def is_trusted_asset_url(url: str, trusted_hosts: set[str] | None = None) -> bool:
+    """Public wrapper for the updater's HTTPS host allowlist."""
+    return _host_allowed(url, set(trusted_hosts or ()))
+
+
 def _asset_tokens(asset: ReleaseAsset) -> tuple[str, str, str, str]:
     name = str(asset.name).strip().lower()
     tokens = f"{name} {asset.platform} {asset.arch} {asset.kind}".strip().lower()

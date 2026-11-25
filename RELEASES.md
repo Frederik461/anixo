@@ -100,7 +100,41 @@ The hashes must match exactly. Do not run an unverified download. The in-app
 updater performs the equivalent check automatically against `release-manifest.json`
 before it opens any package; `SHA256SUMS.txt` is the human-verifiable copy.
 
-## Building a release
+## Publishing with the ANIXO CLI (recommended)
+
+From a clean checkout on the configured release branch, run:
+
+```powershell
+Anixo release beta      # 0.1.0-beta.1 → 0.1.0-beta.2
+Anixo release stable    # 0.1.0-beta.N → 0.1.0; requires typing "stable"
+```
+
+Use `Anixo release check [tag]` to resume monitoring and verification after an
+interrupted shell or workflow timeout, and `Anixo release history [limit]` to
+review local tags and published GitHub Releases. Add `--timeout-minutes MINUTES`
+to `beta`, `stable`, or `check` when a longer/shorter workflow wait is needed.
+
+Every publish asks for confirmation and runs preflight before changing files:
+repository/remote, branch, clean work tree, pushed HEAD, local/remote tag,
+`gh` authentication, workflow presence, required tools, full pytest suite,
+Python compilation, manifest generation/parse round trip, dependency lock,
+and discovered version references. It prints `PASSED`, `FAILED`, `UNKNOWN`, and
+`NOT TESTED` instead of implying unrun checks succeeded. The CLI never stashes,
+resets, discards user changes, creates an incomplete GitHub Release, bypasses
+HTTPS allowlisting, overwrites tags, or re-tags after a workflow failure.
+
+After confirmation, it updates every tracked version reference, commits
+`Release v<version>`, pushes the configured branch and tag, waits for the exact
+tag-triggered workflow run, reports failed jobs, and verifies the published tag,
+version/channel, Windows/macOS assets, HTTPS asset URLs, manifest schema, and
+SHA-256 agreement between GitHub, `release-manifest.json`, and `SHA256SUMS.txt`.
+A successful run ends with `READY FOR ANIXO UPDATER TEST`; clean-machine,
+Finder/Gatekeeper, and real-terminal update behaviour still require manual tests.
+
+## Building a release (workflow reference)
+
+The CLI performs the release steps below automatically. These details document
+what the workflow and fallback manual process do.
 
 Prerequisites on the build machines:
 
@@ -112,7 +146,9 @@ Prerequisites on the build machines:
 
 None of these are needed by end users.
 
-1. **Prepare the release.** Update the version string consistently in:
+1. **Prepare the release.** `Anixo release beta` or `Anixo release stable`
+   discovers and updates these references automatically. For a manual dry run,
+   keep the version string consistent in:
    * `pyproject.toml` (`project.version` and the pinned dependency set),
    * `packaging/build_windows.ps1` (`$Version` default),
    * `installer/AnixoSetup.iss` (`MyAppVersion`, `OutputBaseFilename`,
@@ -164,7 +200,10 @@ None of these are needed by end users.
    macOS hashes, then follow [TESTING.md](TESTING.md). Do not claim clean-machine
    or Intel Mac compatibility until those checks have actually been run.
 
-6. **Publish**: push a tag matching the version, for example:
+6. **Publish**: the normal path is `Anixo release beta` or
+   `Anixo release stable`, which commits the version bump, pushes the branch,
+   pushes the tag, monitors the workflow, and verifies the result. The manual
+   equivalent of only the tagging step is:
 
    ```powershell
    git tag v0.1.0-beta.1

@@ -499,7 +499,14 @@ def test_watch_without_history_opens_selector(tmp_path: Path) -> None:
             app.open_details("123")
             await pilot.pause()
             await pilot.press("w")
-            await pilot.pause()
+            # Watch resolution runs in an exclusive worker.  Under a loaded
+            # full-suite run one pause can observe the screen before that worker
+            # publishes the selector, so wait for the state instead of relying
+            # on a single timing window.
+            for _ in range(20):
+                if isinstance(app.screen, EpisodeSelectorScreen):
+                    break
+                await pilot.pause()
             assert isinstance(app.screen, EpisodeSelectorScreen)
 
     asyncio.run(run())

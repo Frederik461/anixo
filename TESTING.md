@@ -20,7 +20,7 @@ been tested. Intel Mac builds are not published until independently tested.
 | Check | Result |
 | --- | --- |
 | `uv lock --check` | PASS — frozen lock resolves. |
-| `python -m pytest -q` | PASS — **251 passed** on real Windows on 2026-11-25 after the update work; **202 passed, 1 skipped** on both GitHub-hosted macOS runners at the earlier release check (the skip is the Windows-only cmd-wrapper integration test). The newer mouse, update, and release-manifest tests have not been run on macOS. |
+| `python -m pytest -q` | PASS — **271 passed** on real Windows on 2026-11-25 after the release-manager work (251 after the update work); **202 passed, 1 skipped** on both GitHub-hosted macOS runners at the earlier release check (the skip is the Windows-only cmd-wrapper integration test). The newer mouse, update, release-manifest, and release-manager tests have not been run on macOS. |
 | `python -m compileall` / `py_compile` over source, services, platforms, screens, tests | PASS — no syntax errors. |
 | `uninstaller.py --version` / `--help` | PASS — standalone CLI starts and lists all options. |
 | `assets/make_icons.py` | PASS — ICO files contain 16/32/48/64/128/256 px frames and `anixo.png` source for `.icns`. |
@@ -65,6 +65,19 @@ been tested. Intel Mac builds are not published until independently tested.
 | Helper staging, rollback, and data preservation | PASS — deterministic tests cover plan validation, checksum re-verification, parent-process wait, backup/overlay for installer/portable/`.app` modes, health check, rollback on failure, and preservation of data/config/dependency files. |
 | Update center UI | PASS — automated Textual test checks all buttons, keyboard bindings, disabled states, release-notes and back actions, and route integration. |
 | ani-cli automatic update | PASS — deterministic tests cover known/owned revision detection, upstream digest lookup with offline cache, owned-only staged replacement, backup/rollback, and refusal for user-managed copies. |
+| In-CLI release manager | PASS — deterministic tests cover version discovery/increment, beta→stable phrase, preflight refusal paths, commit/push/tag order, workflow monitoring/failure resume, published manifest/checksum/URL verification, history, and CLI dispatch; no test contacts GitHub or mutates a real repository. |
+
+## Release-manager verification (2026-11-25)
+
+| Check | Result |
+| --- | --- |
+| `pytest -q tests/test_release_manager.py` | PASS — 16 passed. |
+| `pytest -q tests/test_cli.py tests/test_release_manager.py` | PASS — 24 passed; existing CLI parsing/install/version tests unchanged. |
+| `pytest -q` | PASS — **271 passed in 136.30s** on Windows 11, Python 3.12.10 after the release-manager work. |
+| `compileall -q main.py config.py version.py services updater_helper.py screens packaging/make_release_manifest.py` | PASS — no syntax errors. |
+| Git/gh/HTTP isolation | PASS — injected runner, confirmer, fetcher, head fetcher, clock, and sleep fakes; no token value is printed. |
+| Existing Textual timing flake | FIXED — `test_watch_without_history_opens_selector` now waits for the exclusive watch worker's screen state instead of relying on one `pilot.pause()` under full-suite load. |
+| Real GitHub tag, workflow run, and published release | NOT TESTED — no tag or release has been created for a release-manager-published version. `Anixo release check` is the resume path once one exists. |
 
 ## Episode-release, mouse, and performance work (2026-11-24)
 

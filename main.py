@@ -36,6 +36,10 @@ _EPILOG = """examples:
   Anixo --data-dir /path/ANIXO
   Anixo --migrate-from /path/to/legacy/data
   Anixo --record-install --install-dir /path/to/ANIXO
+  Anixo release beta               Publish the next beta through GitHub Actions
+  Anixo release stable             Convert the current beta to a stable release
+  Anixo release check [tag]        Resume workflow/asset verification
+  Anixo release history [limit]    Show local tags and GitHub Releases
 """
 
 
@@ -137,6 +141,44 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="KIND",
         help="Installation kind recorded by --record-install.",
     )
+
+    commands = parser.add_subparsers(dest="command")
+    release = commands.add_parser(
+        "release",
+        help="Bump versions and publish through the existing GitHub Actions workflow.",
+        description="Manage ANIXO releases without manual version/tag edits.",
+    )
+    release_actions = release.add_subparsers(dest="release_command", required=True)
+
+    def _add_timeout(action_parser: argparse.ArgumentParser) -> None:
+        action_parser.add_argument(
+            "--timeout-minutes",
+            type=int,
+            default=None,
+            metavar="MINUTES",
+            help="Workflow wait timeout (5-180; default from config, usually 45).",
+        )
+
+    for action in ("beta", "stable"):
+        action_parser = release_actions.add_parser(
+            action,
+            help=f"Publish the next {action} release.",
+        )
+        _add_timeout(action_parser)
+
+    check = release_actions.add_parser(
+        "check",
+        help="Resume checking an existing tag's workflow run and published assets.",
+    )
+    check.add_argument("tag", nargs="?", default="", metavar="TAG")
+    _add_timeout(check)
+
+    history = release_actions.add_parser(
+        "history",
+        help="List local release tags and GitHub Releases.",
+    )
+    history.add_argument("limit", nargs="?", type=int, default=10, metavar="COUNT")
+
     return parser
 
 
@@ -161,6 +203,23 @@ def main(argv: list[str] | None = None) -> int:
         config_path = data_dir / "config.json"
 
     config = ConfigStore(path=config_path, data_dir=data_dir).load()
+
+    if args.command == "release":
+        from services.release_manager import ReleaseManager
+
+        manager = ReleaseManager(
+            Path(__file__).resolve().parent,
+            config,
+            timeout_minutes=getattr(args, "timeout_minutes", None),
+        )
+        if args.release_command in {"beta", "stable"}:
+            return manager.run_release(args.release_command)
+        if args.release_command == "check":
+            return manager.check_release(args.tag)
+        if args.release_command == "history":
+            return manager.history(args.limit)
+        raise AssertionError("unhandled release command")  # pragma: no cover
+
     if args.no_images:
         config.images = "off"
     if args.setup:

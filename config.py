@@ -71,6 +71,12 @@ _DEFAULT_EXTRA: dict[str, Any] = {
     # The source repository is private.  Testers need a public manifest feed
     # URL; no token is ever stored in config.
     "update_repo": "Frederik461/anixo",
+    # Release manager settings.  The workflow remains the source of truth;
+    # these values only tell the CLI which ref and remote to publish from.
+    "release_branch": "main",
+    "release_remote": "origin",
+    "release_workflow": ".github/workflows/release.yml",
+    "release_timeout_minutes": 45,
     "update_feed_url": "",
     "update_public_key": "",
     "check_for_app_updates": True,
@@ -118,6 +124,10 @@ _FIELD_ALIASES: dict[str, str] = {
     "migrationCompleted": "migration_completed",
     "updateChannel": "update_channel",
     "updateRepo": "update_repo",
+    "releaseBranch": "release_branch",
+    "releaseRemote": "release_remote",
+    "releaseWorkflow": "release_workflow",
+    "releaseTimeoutMinutes": "release_timeout_minutes",
     "updateFeedUrl": "update_feed_url",
     "updatePublicKey": "update_public_key",
     "checkForAppUpdates": "check_for_app_updates",
@@ -412,6 +422,47 @@ class Config:
         self.extra["update_repo"] = str(value).strip()
 
     @property
+    def release_branch(self) -> str:
+        return str(self.extra.get("release_branch") or "main").strip() or "main"
+
+    @release_branch.setter
+    def release_branch(self, value: str) -> None:
+        self.extra["release_branch"] = str(value).strip() or "main"
+
+    @property
+    def release_remote(self) -> str:
+        return str(self.extra.get("release_remote") or "origin").strip() or "origin"
+
+    @release_remote.setter
+    def release_remote(self, value: str) -> None:
+        self.extra["release_remote"] = str(value).strip() or "origin"
+
+    @property
+    def release_workflow(self) -> str:
+        value = str(self.extra.get("release_workflow") or "").strip()
+        return value or ".github/workflows/release.yml"
+
+    @release_workflow.setter
+    def release_workflow(self, value: str) -> None:
+        self.extra["release_workflow"] = str(value).strip()
+
+    @property
+    def release_timeout_minutes(self) -> int:
+        try:
+            minutes = int(self.extra.get("release_timeout_minutes", 45))
+        except (TypeError, ValueError):
+            return 45
+        return max(5, min(180, minutes))
+
+    @release_timeout_minutes.setter
+    def release_timeout_minutes(self, value: int | str) -> None:
+        try:
+            minutes = int(value)
+        except (TypeError, ValueError):
+            minutes = 45
+        self.extra["release_timeout_minutes"] = max(5, min(180, minutes))
+
+    @property
     def update_feed_url(self) -> str:
         return str(
             self.extra.get("update_feed_url")
@@ -509,6 +560,10 @@ class Config:
         self.migration_completed = self.migration_completed
         self.update_channel = self.update_channel
         self.update_repo = self.update_repo
+        self.release_branch = self.release_branch
+        self.release_remote = self.release_remote
+        self.release_workflow = self.release_workflow
+        self.release_timeout_minutes = self.release_timeout_minutes
         self.update_feed_url = self.update_feed_url
         self.update_public_key = self.update_public_key
         self.check_for_app_updates = self.check_for_app_updates

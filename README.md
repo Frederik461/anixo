@@ -186,6 +186,35 @@ installation begins. Settings, history, watchlist, progress, config,
 user-installed dependencies, shortcuts, and uninstall registration are never
 deleted. Redacted update events are written to the data directory.
 
+### Releases from the CLI
+
+Maintainers publish from the repository with the integrated release manager:
+
+```text
+Anixo release beta               # 0.1.0-beta.1 → 0.1.0-beta.2
+Anixo release stable             # 0.1.0-beta.2 → 0.1.0 (requires typing "stable")
+Anixo release check [tag]        # resume workflow/asset verification for an existing tag
+Anixo release history [limit]    # list local tags and GitHub Releases
+```
+
+The manager prints the current/target version, channel, branch, tests, workflow
+status, and final updater-test readiness. Before changing anything it verifies
+the repository/remote, release branch, clean work tree, pushed HEAD, available
+tag, `gh` authentication, workflow, required tools, full test suite, Python
+compilation, manifest schema, dependency lock, and packaging references. It
+never stashes, resets, discards changes, creates a GitHub Release itself,
+bypasses the workflow, or overwrites a tag. Version references are discovered
+from tracked files and updated together. Beta publication needs an explicit
+yes; beta→stable additionally requires typing `stable`.
+
+`.github/workflows/release.yml` remains the only publisher: the CLI commits
+`Release v<version>`, pushes the configured branch, pushes the `v<version>` tag,
+then monitors the exact tagged workflow run. Configure `release_branch`,
+`release_remote`, `release_workflow`, and `release_timeout_minutes` in
+`config.json` if the defaults (`main`, `origin`, that workflow, 45 minutes) are
+not appropriate. Use `--timeout-minutes MINUTES` on `beta`, `stable`, or `check`
+to override the wait once.
+
 Settings → Dependencies shows the detected ani-cli revision and ownership. A
 verified ani-cli update re-downloads the official checksum-pinned script and is
 refused for user-managed or unknown copies.
