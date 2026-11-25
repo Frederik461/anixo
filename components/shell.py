@@ -8,7 +8,7 @@ from textual import on
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import Button, Footer, Static
+from textual.widgets import Button, Footer, Input, Static
 
 _ROUTES = {
     "nav-home": "action_goto_dashboard",
@@ -40,7 +40,6 @@ class NavItem(Button):
         self.full_label = label
         self.compact_text = compact_label
         self.compact_mode = False
-        self.active_effect_duration = 0.0
 
     def set_compact(self, compact: bool) -> None:
         if compact == self.compact_mode:
@@ -84,6 +83,11 @@ class NavRail(Container, can_focus=False):
         if not action_name:
             return
         event.stop()
+        # Route actions ignore keyboard shortcuts while an input is focused.
+        # A deliberate nav click must always work, so release focus first.
+        focused = self.app.focused
+        if isinstance(focused, Input):
+            focused.blur()
         getattr(self.app, action_name)()
 
     def set_compact(self, compact: bool) -> None:
@@ -106,10 +110,29 @@ class TopBar(Horizontal, can_focus=False):
         self.hint_text = hint
 
     def compose(self) -> ComposeResult:
+        yield Button("←", id="nav-back", classes="nav-arrow", disabled=True)
+        yield Button("→", id="nav-forward", classes="nav-arrow", disabled=True)
         yield Static(self.title_text.upper(), classes="topbar-title")
         yield Static("", classes="topbar-rule")
         yield Static(self.hint_text, classes="topbar-hint")
         yield Static("? HELP", classes="topbar-shortcut")
+
+    @on(Button.Pressed, "#nav-back")
+    def on_back_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self._release_input_focus()
+        self.app.action_navigate_back()
+
+    @on(Button.Pressed, "#nav-forward")
+    def on_forward_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self._release_input_focus()
+        self.app.action_navigate_forward()
+
+    def _release_input_focus(self) -> None:
+        focused = self.app.focused
+        if isinstance(focused, Input):
+            focused.blur()
 
 
 class ShellScreen(Screen[None]):

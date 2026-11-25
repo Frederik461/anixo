@@ -210,6 +210,8 @@ def test_settings_groups_are_reorganized(tmp_path: Path) -> None:
                 "Image rendering",
                 "Playback",
                 "Data & cache",
+                "Dependencies",
+                "Updates",
                 "Application",
                 "System",
             ]

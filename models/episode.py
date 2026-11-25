@@ -45,6 +45,43 @@ def normalize_state(value: str | None) -> str:
     return value if value in (WATCHING, COMPLETED) else UNWATCHED
 
 
+def released_episode_limit(
+    anime: Anime,
+    *,
+    states: Mapping[str, str] | None = None,
+    progress: Mapping[str, Mapping[str, Any]] | None = None,
+    last_episode: str | None = None,
+) -> int | None:
+    """Highest episode number that may be *inferred* from metadata alone.
+
+    A provider episode list is always authoritative and is never capped here.
+    This cap only applies when ANIXO would otherwise generate ``1..episodes``
+    from AniList's planned season total, which includes unaired episodes.
+
+    ``None`` means no restriction is known; ``0`` means a releasing series with
+    no known airing progress, so only locally known episodes should be shown.
+    """
+    total = anime.episodes if anime.episodes and anime.episodes > 0 else None
+    next_number = anime.next_airing_episode
+    if next_number is not None and next_number > 0:
+        # AniList reports the number of the *next* episode to air, so every
+        # episode from that number onward is still unreleased.
+        limit = next_number - 1
+    elif (anime.status or "").upper() == "RELEASING":
+        limit = 0
+    else:
+        return total
+
+    known = {
+        number
+        for value in (*(states or {}), *(progress or {}), last_episode)
+        if (number := episode_number(value)) is not None
+    }
+    if known:
+        limit = max(limit, max(known))
+    return min(limit, total) if total is not None else limit
+
+
 def state_label(state: str) -> str:
     return _STATE_LABELS.get(state, _STATE_LABELS[UNWATCHED])
 
@@ -120,9 +157,10 @@ def build_episodes(
 ) -> list[Episode]:
     """Build an ordered episode list from available data only.
 
-    ``entries`` is optional source-provided episode metadata.  When it is
-    absent the list is derived from ``Anime.episodes``; when that is also
-    absent the result is empty rather than invented.
+    ``entries`` is optional provider-reported episode data and is always
+    trusted as the exact list of released episodes.  When it is absent the list
+    is derived from ``Anime.episodes``, capped at the last aired episode for
+    releasing series; unaired episodes are never generated.
     """
     states = states or {}
     progress = progress or {}
@@ -142,7 +180,14 @@ def build_episodes(
                 )
             )
     elif anime.episodes and anime.episodes > 0:
-        for index in range(anime.episodes):
+        limit = released_episode_limit(
+            anime,
+            states=states,
+            progress=progress,
+            last_episode=last_episode,
+        )
+        count = anime.episodes if limit is None else min(anime.episodes, limit)
+        for index in range(count):
             episodes.append(Episode(number=str(index + 1), ordinal=index))
 
     last_number = episode_number(last_episode)

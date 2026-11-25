@@ -94,7 +94,9 @@ class DashboardScreen(ShellScreen):
         tier = self._tier()
         if self.is_mounted and tier != self._last_tier and self._has_data():
             self._last_tier = tier
-            asyncio.create_task(self._render_dashboard())
+            self.run_worker(
+                self._render_dashboard(), exclusive=True, group="dashboard-render"
+            )
 
     def _tier(self) -> str:
         if self.has_class("compact"):
@@ -111,14 +113,16 @@ class DashboardScreen(ShellScreen):
 
     async def refresh_data(self) -> None:
         app = self.app
-        self.continue_entries = await asyncio.to_thread(app.database.list_history, 64)
+        self.continue_entries = await asyncio.to_thread(app.database.list_history, 8)
         try:
             self.trending = await app.api.trending(per_page=12)
         except Exception:
             self.trending = []
-        for entry in self.continue_entries:
-            app.api.enrich_from_cache(entry.anime.display_title(), entry.anime)
         self._last_tier = self._tier()
+        # Only the first few rows are rendered; enriching all history rows
+        # repeated the same SQLite lookup for nothing.
+        for entry in self.continue_entries[: self._visible_count()]:
+            app.api.enrich_from_cache(entry.anime.display_title(), entry.anime)
         await self._render_dashboard()
 
     def _choose_featured(self) -> None:
@@ -184,6 +188,7 @@ class DashboardScreen(ShellScreen):
             )
 
         limit = self._visible_count()
+        watchlisted = await asyncio.to_thread(self.app.database.watchlisted_ids)
         if self.continue_entries:
             widgets.append(
                 SectionHeading(
@@ -209,7 +214,7 @@ class DashboardScreen(ShellScreen):
             for anime in self.trending[:limit]:
                 card = AnimeCard(
                     anime,
-                    watchlisted=self.app.database.is_watchlisted(anime.id),
+                    watchlisted=anime.id in watchlisted,
                     renderer=self.app.config.artwork_renderer,
                 )
                 card.data = {"kind": "trending", "anime": anime}
@@ -283,6 +288,23 @@ class DashboardScreen(ShellScreen):
     def _selected_card(self) -> AnimeCard | None:
         cards = self.active_cards
         return cards[self.selection.index] if cards else None
+
+    @on(AnimeCard.Chosen)
+    def on_card_chosen(self, event: AnimeCard.Chosen) -> None:
+        event.stop()
+        for section, selector in enumerate(("#continue-row AnimeCard", "#trending-row AnimeCard")):
+            cards = list(self.query(selector))
+            if event.source in cards:
+                self.section = section
+                self.selection.index = cards.index(event.source)
+                self.update_selection()
+                break
+        self.app.open_details(event.anime.id)
+
+    @on(FeaturedPanel.Chosen)
+    def on_featured_chosen(self, event: FeaturedPanel.Chosen) -> None:
+        event.stop()
+        self.app.open_details(event.anime.id)
 
     @on(Button.Pressed, "#featured-watch")
     async def on_featured_watch(self, event: Button.Pressed) -> None:

@@ -22,6 +22,7 @@ _MEDIA_FIELDS = """
   averageScore
   popularity
   status
+  nextAiringEpisode { episode airingAt }
   season
   seasonYear
   startDate { year }
@@ -99,6 +100,7 @@ class AnimeAPI:
         self.database = database
         self._request_lock = asyncio.Lock()
         self._last_request = 0.0
+        self._inflight: dict[str, asyncio.Future[dict[str, Any] | None]] = {}
 
     async def search(
         self,
@@ -181,9 +183,17 @@ class AnimeAPI:
         )
         return self._map_page(payload)
 
-    async def details(self, anilist_id: int) -> Anime | None:
+    async def details(self, anilist_id: int, *, refresh: bool = False) -> Anime | None:
+        """Fetch details, optionally bypassing a fresh cached response.
+
+        ``refresh`` is used for releasing series whose cached metadata predates
+        ANIXO's airing-progress tracking. A failed refresh still falls back to
+        the stale cache, so offline use is unaffected.
+        """
         key = f"anilist:details:{anilist_id}"
-        payload = await self._request(key, _DETAILS_QUERY, {"id": anilist_id})
+        payload = await self._request(
+            key, _DETAILS_QUERY, {"id": anilist_id}, refresh=refresh
+        )
         data = payload or {}
         # Older cache rows may still contain the original GraphQL envelope.
         if isinstance(data.get("data"), Mapping):
@@ -213,31 +223,63 @@ class AnimeAPI:
         page: int | None = None,
         per_page: int | None = None,
         search_text: str | None = None,
+        refresh: bool = False,
     ) -> dict[str, Any] | None:
-        cached = self.database.get_cache(key, self.config.metadata_ttl_hours)
+        cached = (
+            None
+            if refresh
+            else await asyncio.to_thread(
+                self.database.get_cache, key, self.config.metadata_ttl_hours
+            )
+        )
         if cached is not None:
             return cached
 
-        async with self._request_lock:
-            loop = asyncio.get_running_loop()
-            wait = 0.35 - (loop.time() - self._last_request)
-            if wait > 0:
-                await asyncio.sleep(wait)
-            payload = await self._post(query, variables)
-            self._last_request = loop.time()
+        loop = asyncio.get_running_loop()
+        inflight = None if refresh else self._inflight.get(key)
+        if inflight is not None and not inflight.done():
+            # Shield the shared request so one cancelled caller cannot cancel
+            # the fetch for everybody else waiting on the same cache key.
+            return await asyncio.shield(inflight)
 
-        if payload is None:
-            return self.database.get_stale_cache(key)
-        self.database.set_cache(
-            key,
-            payload,
-            self.config.metadata_ttl_hours,
-            query_kind=query_kind,
-            page=page,
-            per_page=per_page,
-            search_text=search_text,
-        )
-        return payload
+        future: asyncio.Future[dict[str, Any] | None] = loop.create_future()
+        if not refresh:
+            self._inflight[key] = future
+        try:
+            async with self._request_lock:
+                wait = 0.35 - (loop.time() - self._last_request)
+                if wait > 0:
+                    await asyncio.sleep(wait)
+                payload = await self._post(query, variables)
+                self._last_request = loop.time()
+
+            if payload is None:
+                payload = await asyncio.to_thread(self.database.get_stale_cache, key)
+            else:
+                await asyncio.to_thread(
+                    self.database.set_cache,
+                    key,
+                    payload,
+                    self.config.metadata_ttl_hours,
+                    query_kind=query_kind,
+                    page=page,
+                    per_page=per_page,
+                    search_text=search_text,
+                )
+            if not future.done():
+                future.set_result(payload)
+            return payload
+        except Exception as error:
+            if not future.done():
+                future.set_exception(error)
+            raise
+        finally:
+            if self._inflight.get(key) is future:
+                del self._inflight[key]
+            if future.done() and not future.cancelled():
+                # Retrieve the exception even when there are no waiters, so
+                # asyncio does not report an unhandled future exception.
+                future.exception()
 
     async def _post(
         self, query: str, variables: dict[str, Any]

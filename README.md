@@ -36,8 +36,8 @@ The product name and executable are ANIXO / `Anixo.exe` (Windows) or
 
 ## Verified status (2026-11-21)
 
-- Windows: full local pipeline passed with **198 tests passed**; silent install/uninstall validation passed.
-- macOS: [CI run 44919795580](https://github.com/Frederik461/anixo/actions/runs/44919795580) passed on both `macos-15` (ARM64) and `macos-15-intel` (Intel): build, **201 passed / 1 skipped** tests, architecture, packaging, and runtime/uninstall validation.
+- Windows: full local pipeline passed with **198 tests passed**; after the episode-release, mouse-accessibility, and performance work the full suite is **217 passed** (2026-11-25). Silent install/uninstall validation passed.
+- macOS: [CI run 44919795580](https://github.com/Frederik461/anixo/actions/runs/44919795580) passed on both `macos-15` (ARM64) and `macos-15-intel` (Intel): build, **201 passed / 1 skipped** tests, architecture, packaging, and runtime/uninstall validation. The newer mouse-interaction tests have not been run on a Mac yet.
 - Signing and notarization are **UNVERIFIED** because no Apple secrets were configured. Real Finder launch, Gatekeeper installation, and playback are **NOT TESTED** by headless CI. Intel DMGs are CI artifacts only, not public-release assets.
 
 ---
@@ -89,6 +89,7 @@ uv run python main.py
 | --- | --- |
 | `D` / `G` / `W` / `H` / `S` | Home / Discover / Watchlist / History / Settings |
 | `Tab` / `Shift+Tab` | Next / previous screen |
+| `Alt+←` / `Alt+→` | Back / forward through primary screens (also the top-bar arrows) |
 | `←` / `→` | Move selection (switch franchise group in the season browser) |
 | `↑` / `↓` | Section, page, or row navigation |
 | `Enter` | Watch, resume, or open |
@@ -104,6 +105,16 @@ uv run python main.py
 | `X` | Diagnostics |
 | `?` / `F1` | Help |
 | `Q` | Quit |
+
+## Mouse and pointer access
+
+Cards, posters, nav items, filter chips, settings/history rows, season and
+episode cells, action buttons, dialog buttons, and the top-bar back/forward
+arrows are all clickable. Left-click activates; right-click never changes a
+selection. Hover, focus, selected, and disabled states are styled, and mouse
+wheel scrolling never selects an episode. Keyboard shortcuts remain authoritative
+and can be mixed with clicks. See `MOUSE_ACCESSIBILITY.md` for the manual
+checklist and `tests/test_mouse_interactions.py` for automated coverage.
 
 ---
 
@@ -136,7 +147,7 @@ selection → playback:
 
 - Search results are grouped conservatively into franchises; original titles and provider order are preserved.
 - The season/movie/special browser shows the exact provider result ID, format, episode count, and available synopsis. Your last choice is remembered per franchise and is preselected on return.
-- Episodes are read from the exact selected provider ID and displayed with their real titles when the provider supplies them.
+- Episodes are read from the exact selected provider ID and displayed with their real titles when the provider supplies them. Provider rows are authoritative and are never capped by AniList's planned total; when the provider list is unavailable, a `RELEASING` series with a known `nextAiringEpisode` shows only episodes through `episode - 1`, and the manual episode jump is always retained.
 - A checksum-verified copy of the official ani-cli script is patched in ANIXO's runtime cache to accept that exact provider ID. `ANI_CLI_MENU=false` makes any attempt to open ani-cli's picker fail instead of prompting.
 - `AniCliService.spawn(..., episode="<n>", resume=False)` sends `-e <n>` together with `-S 1` for the single pinned provider result.
 - `-c` is never combined with an exact episode.
@@ -155,10 +166,29 @@ Press `X` for a redacted environment report showing version, OS, architecture,
 install/data paths, runtime status, playback status, image protocol, network
 status, and cache counts.
 
-Settings → Application contains the stable/beta update channel and a manual
-update check. The checker reads GitHub Releases, verifies `SHA256SUMS.txt`
-before download completion, and launches the installer only after approval. It
-never overwrites user data or the running application.
+Press `U` (or Tab to **Updates**, or Settings → Updates → **Open update
+center**) for the Update Center. It supports both buttons and keyboard shortcuts
+(`C` check, `U` update, `X` cancel, `R` restart + install, `N` release notes).
+
+Settings → Updates holds the stable/beta channel, automatic-check toggle,
+current/latest versions, status, check/update/cancel/restart actions, release
+notes, and optional feed/manifest fields. Checks are cached and channel-aware:
+stable users never receive beta releases. Default `update_repo` is
+`Frederik461/anixo`; a custom HTTPS feed can be set with `update_feed_url` and
+optionally signed with `update_public_key` (OpenSSL). No credentials are stored.
+
+Downloads are accepted only over HTTPS from GitHub Releases assets or the
+configured feed, are pinned to SHA-256 digests, and their package structure is
+validated before use. A separate updater helper waits for ANIXO to exit, backs
+up the old installation, applies the staged package, health-checks the new
+build, and rolls back automatically on failure. Cancellation works until
+installation begins. Settings, history, watchlist, progress, config,
+user-installed dependencies, shortcuts, and uninstall registration are never
+deleted. Redacted update events are written to the data directory.
+
+Settings → Dependencies shows the detected ani-cli revision and ownership. A
+verified ani-cli update re-downloads the official checksum-pinned script and is
+refused for user-managed or unknown copies.
 
 Settings → System → Installation & uninstallation shows the installation kind,
 manifest path, and owned-component count. The **Uninstall ANIXO** action offers:
@@ -181,11 +211,14 @@ failures and manual cleanup steps instead of deleting unknown files.
 - `services/` — AniList, artwork, ani-cli, dependency manager, manifest, uninstall, updater, diagnostics
 - `data/` — SQLite persistence and migration
 - `uninstaller.py`, `uninstaller*.spec` — standalone uninstaller
+- `updater_helper.py` — separate staged-update/rollback process
 - `anixo.spec`, `anixo_macos.spec`, `packaging/`, `installer/` — build and release scripts
+- `packaging/make_release_manifest.py` — deterministic HTTPS asset manifest with digests
 - `.github/workflows/release.yml` — separate Windows and macOS release jobs
 - `.github/workflows/macos.yml` — macOS ARM64/Intel build, test, validation, and artifact matrix
 - `packaging/validate_macos_bundle.py`, `packaging/validate_macos_runtime.py` — macOS CI validators
 - `INSTALLATION.md`, `TESTING.md`, `RELEASES.md`, `TROUBLESHOOTING.md` — user and release documentation
+- `MOUSE_ACCESSIBILITY.md`, `benchmarks/` — manual pointer checklist and repeatable offline performance harness
 
 ---
 
@@ -200,7 +233,12 @@ uv lock --check
 .venv\Scripts\python.exe main.py --version
 .venv\Scripts\python.exe main.py --diagnose
 .venv\Scripts\python.exe uninstaller.py --help
+.\.venv\Scripts\python.exe benchmarks\perf_bench.py after
 ```
+
+See `benchmarks/README.md` for the measured before/after report and its
+caveats. UI-level timings are noisy; the deterministic request/cache/database
+hotspots are the measured improvements.
 
 `macos.yml` adds a separate macOS 15 ARM64 and Intel job. Each job runs the
 full suite, builds the standalone app/`.app`/DMG, checks Mach-O architecture and

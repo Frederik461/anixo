@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -42,6 +43,10 @@ class ImageCache:
         self.originals.mkdir(parents=True, exist_ok=True)
         self.processed.mkdir(parents=True, exist_ok=True)
         self._pins: dict[Path, int] = {}
+        # A valid processed file is immutable. Remember the stat signature of
+        # files we have already verified so repeat hits do not decode the PNG.
+        self._validated: OrderedDict[Path, tuple[int, int]] = OrderedDict()
+        self._validated_limit = 512
 
     @staticmethod
     def original_digest(url: str) -> str:
@@ -97,18 +102,29 @@ class ImageCache:
     def get_processed(self, key: CacheKey) -> Path | None:
         path = self.processed_path(key)
         try:
-            usable = path.is_file() and path.stat().st_size > 0
+            stat = path.stat()
+            signature = (stat.st_mtime_ns, stat.st_size)
         except OSError:
-            usable = False
-        if usable:
-            try:
-                with Image.open(path) as image:
-                    image.verify()
-            except (OSError, UnidentifiedImageError):
-                path.unlink(missing_ok=True)
-                return None
+            self._validated.pop(path, None)
+            return None
+        if signature[1] <= 0:
+            self._validated.pop(path, None)
+            return None
+        if self._validated.get(path) == signature:
+            self._validated.move_to_end(path)
             return path
-        return None
+        try:
+            with Image.open(path) as image:
+                image.verify()
+        except (OSError, UnidentifiedImageError):
+            path.unlink(missing_ok=True)
+            self._validated.pop(path, None)
+            return None
+        self._validated[path] = signature
+        self._validated.move_to_end(path)
+        while len(self._validated) > self._validated_limit:
+            self._validated.popitem(last=False)
+        return path
 
     def store_processed(self, key: CacheKey, image: Image.Image) -> Path:
         target = self.processed_path(key)
@@ -123,6 +139,8 @@ class ImageCache:
         return target
 
     def clear(self, kind: CacheKind = "all") -> None:
+        if kind in ("processed", "all"):
+            self._validated.clear()
         for directory in (
             [self.originals, self.processed]
             if kind == "all"
@@ -163,6 +181,7 @@ class ImageCache:
             _, victim = files.pop(0)
             try:
                 victim.unlink()
+                self._validated.pop(victim, None)
                 removed += 1
             except OSError:
                 continue

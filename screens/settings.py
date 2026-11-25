@@ -43,8 +43,6 @@ _SECTIONS: dict[str, tuple[tuple[str, str, str, tuple[str, ...] | None], ...]] =
         ("Git Bash path", "git_bash_path", "text", None),
         ("mpv path", "mpv_path", "text", None),
         ("CMD wrapper", "ani_cli_cmd_wrapper", "bool", None),
-        ("Check for ani-cli updates", "check_for_ani_cli_updates", "bool", None),
-        ("Update ani-cli", "update_ani_cli", "action", None),
     ),
     "Data & cache": (
         ("Metadata endpoint", "metadata_endpoint", "text", None),
@@ -55,11 +53,34 @@ _SECTIONS: dict[str, tuple[tuple[str, str, str, tuple[str, ...] | None], ...]] =
         ("Cache entries", "cache_max_entries", "int", None),
         ("Clear metadata cache", "clear_metadata", "action", None),
     ),
+    "Dependencies": (
+        ("ani-cli installed", "ani_cli_version", "readonly", None),
+        ("ani-cli latest", "ani_cli_latest", "readonly", None),
+        ("ani-cli health", "ani_cli_status", "readonly", None),
+        ("ani-cli update status", "ani_cli_update_status", "readonly", None),
+        ("Last ani-cli check", "ani_cli_last_check", "readonly", None),
+        ("Check automatically", "check_for_ani_cli_updates", "bool", None),
+        ("Check ani-cli now", "check_ani_cli_updates", "action", None),
+        ("Update ani-cli", "update_ani_cli", "action", None),
+    ),
+    "Updates": (
+        ("Update channel", "update_channel", "choice", ("stable", "beta")),
+        ("Check automatically", "check_for_app_updates", "bool", None),
+        ("Installed version", "app_installed_version", "readonly", None),
+        ("Latest version", "app_latest_version", "readonly", None),
+        ("Update status", "update_status", "readonly", None),
+        ("Last check", "last_update_check", "readonly", None),
+        ("Check for updates", "check_updates", "action", None),
+        ("Update ANIXO", "update_anixo", "action", None),
+        ("Cancel download", "cancel_update", "action", None),
+        ("Restart and install", "restart_update", "action", None),
+        ("View release notes", "view_release_notes", "action", None),
+        ("Open update center", "open_update_center", "action", None),
+        ("Update feed URL", "update_feed_url", "text", None),
+        ("Manifest public key", "update_public_key", "text", None),
+    ),
     "Application": (
         ("Confirm history clear", "confirm_before_clear_history", "bool", None),
-        ("Update channel", "update_channel", "choice", ("stable", "beta")),
-        ("ANIXO update status", "update_status", "readonly", None),
-        ("Check for ANIXO updates", "check_updates", "action", None),
         ("Migrate legacy data", "migrate_legacy", "action", None),
         ("Open setup wizard", "setup_wizard", "action", None),
         ("Full diagnostics", "diagnostics_screen", "action", None),
@@ -167,8 +188,32 @@ class SettingsScreen(ShellScreen):
     def _value(self, key: str) -> Any:
         if key == "diagnostics":
             return "\n".join(self._diagnostics)
+        state = getattr(self.app, "update_state", None)
         if key == "update_status":
-            return str(getattr(self.app, "_update_status", "No update check yet."))
+            return str(getattr(state, "status", "No update check yet.")) or "—"
+        if key in {"app_installed_version", "app_latest_version"}:
+            return str(
+                getattr(state, "current", "") if key == "app_installed_version"
+                else getattr(state, "latest", "")
+            ) or "—"
+        if key in {
+            "ani_cli_version",
+            "ani_cli_latest",
+            "ani_cli_status",
+            "ani_cli_update_status",
+            "ani_cli_last_check",
+        }:
+            installed = getattr(self.app, "ani_cli_status", None)
+            check = getattr(self.app, "ani_cli_check", None)
+            if key == "ani_cli_version":
+                return getattr(installed, "version", "—") if installed else "—"
+            if key == "ani_cli_latest":
+                return getattr(check, "latest_version", "") or "not checked" if check else "not checked"
+            if key == "ani_cli_status":
+                return getattr(installed, "health", "—") if installed else "—"
+            if key == "ani_cli_update_status":
+                return (getattr(check, "message", "") or getattr(check, "error", "")) if check else "not checked"
+            return self.app.config.last_ani_cli_check or "never"
         if key == "active_protocol":
             renderer, note = resolve_renderer(
                 self.app.config.artwork_renderer, self.app.capabilities
@@ -288,11 +333,26 @@ class SettingsScreen(ShellScreen):
         elif row.key == "update_ani_cli":
             self.run_worker(self._update_ani_cli())
             return
+        elif row.key == "check_ani_cli_updates":
+            self.run_worker(self._check_ani_cli_updates())
+            return
         elif row.key == "diagnostics":
             await self.action_diagnostics()
             return
         elif row.key == "check_updates":
             self.run_worker(self._check_for_updates())
+            return
+        elif row.key == "update_anixo":
+            self.run_worker(self._update_anixo())
+            return
+        elif row.key == "cancel_update":
+            self.app.action_cancel_update()
+        elif row.key == "restart_update":
+            self.app.action_restart_update()
+        elif row.key == "view_release_notes":
+            self.app.action_view_release_notes()
+        elif row.key == "open_update_center":
+            self.app.action_open_updates()
             return
         elif row.key == "migrate_legacy":
             self.run_worker(self._migrate_legacy())
@@ -307,18 +367,27 @@ class SettingsScreen(ShellScreen):
             self.app.action_goto_diagnostics()
         await self.render_settings()
 
+    async def _check_ani_cli_updates(self) -> None:
+        await self.app.action_check_ani_cli_updates()
+        await self.render_settings()
+
     async def _update_ani_cli(self) -> None:
         confirmed = await self.app.confirm(
             "Update ani-cli?",
-            "ANIXO re-downloads the checksum-pinned official script and backs up "
-            "the old copy. ani-cli's own -U updater is never used because it can "
-            "replace the exact-provider patch.",
+            "ANIXO checks the official upstream release, downloads into staging, "
+            "verifies the SHA-256 digest, backs up the ANIXO-managed script, then "
+            "replaces it. ani-cli's own -U updater is never used. User-managed "
+            "scripts are never overwritten.",
         )
         if confirmed:
-            result = await asyncio.to_thread(self.app.dependencies.update_ani_cli)
+            result = await self.app.action_update_ani_cli()
             self.app.notify_user(result.message)
             if result.detail:
                 self.app.notify_user(result.detail[:240])
+        await self.render_settings()
+
+    async def _update_anixo(self) -> None:
+        await self.app.action_update_anixo()
         await self.render_settings()
 
     async def _uninstall(self) -> None:
@@ -422,7 +491,7 @@ class SettingsScreen(ShellScreen):
         except (KeyError, TypeError, ValueError):
             return
         self.row_index = index
-        await self.render_settings()
+        await self.action_activate()
 
     async def _back_to_system(self) -> None:
         self._section_override = None

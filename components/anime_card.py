@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, cast
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.events import Click
+from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import Static
 
@@ -19,7 +21,15 @@ if TYPE_CHECKING:
 
 
 class AnimeCard(Horizontal, can_focus=False):
+    """Mouse-selectable anime card. Clicking it opens the anime details."""
+
     selected = reactive(False)
+
+    class Chosen(Message):
+        def __init__(self, anime: Anime, source: AnimeCard | None = None) -> None:
+            self.anime = anime
+            self.source = source
+            super().__init__()
 
     def __init__(
         self,
@@ -73,3 +83,9 @@ class AnimeCard(Horizontal, can_focus=False):
 
     def watch_selected(self, selected: bool) -> None:
         self.set_class(selected, "selected")
+
+    def on_click(self, event: Click) -> None:
+        if event.button != 1:
+            return
+        event.stop()
+        self.post_message(self.Chosen(self.anime, self))

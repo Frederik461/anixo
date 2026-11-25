@@ -91,6 +91,34 @@ def test_details_reads_graphql_data_envelope(tmp_path: Path, monkeypatch: pytest
     assert anime.display_title() == "Frieren"
 
 
+def test_details_tracks_next_airing_episode_and_can_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = _api(tmp_path)
+    calls: list[str] = []
+    media = {
+        **_MEDIA,
+        "status": "RELEASING",
+        "nextAiringEpisode": {"episode": 9, "airingAt": 1796137200},
+    }
+
+    async def fake_post(self: AnimeAPI, query: str, variables: dict) -> dict:
+        calls.append(query)
+        return {"data": {"Media": media}}
+
+    monkeypatch.setattr(AnimeAPI, "_post", fake_post)
+    anime = asyncio.run(api.details(154587))
+
+    assert anime is not None and anime.next_airing_episode == 9
+    assert "nextAiringEpisode" in calls[0]
+
+    asyncio.run(api.details(154587))
+    assert len(calls) == 1  # cached
+
+    asyncio.run(api.details(154587, refresh=True))
+    assert len(calls) == 2  # forced refresh
+
+
 def test_post_normalizes_envelope_before_caching(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

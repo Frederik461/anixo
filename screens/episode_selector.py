@@ -31,6 +31,7 @@ from models.episode import (
     grouped_episodes,
     has_groups,
 )
+from services.provider import ProviderError
 
 _SHORTCUTS = (
     "↑↓←→  move    PgUp/PgDn  page    Home/End  first/last    "
@@ -66,6 +67,8 @@ class EpisodeCell(Static):
         self.set_class(selected, "selected")
 
     def on_click(self, event: events.Click) -> None:
+        if event.button != 1:
+            return
         event.stop()
         self.post_message(self.Chosen(self.episode))
 
@@ -195,7 +198,7 @@ class EpisodeSelectorScreen(ShellScreen):
             self._last_tier = tier
             self._apply_layout()
             if self.episodes:
-                asyncio.create_task(self._render_page())
+                self.run_worker(self._render_page(), exclusive=True, group="episode-render")
 
     def _tier(self) -> str:
         if self.has_class("compact"):
@@ -248,9 +251,28 @@ class EpisodeSelectorScreen(ShellScreen):
             return
         self._loading = True
         try:
+            self.anime = await self.app.refresh_airing_progress(self.anime)
             entry = await asyncio.to_thread(
                 self.app.database.find_history_for_anime, self.anime
             )
+            if not self.source_entries:
+                source_id = self.anime.source_id or (entry.source_id if entry else None)
+                if source_id:
+                    try:
+                        released = await asyncio.to_thread(
+                            self.app.provider.episodes, source_id
+                        )
+                    except ProviderError:
+                        released = []
+                    if released:
+                        self.source_entries = [
+                            {
+                                "number": episode.number,
+                                "title": episode.title,
+                                "provider_episode_id": episode.provider_episode_id,
+                            }
+                            for episode in released
+                        ]
             records = await asyncio.to_thread(
                 self.app.database.get_episode_records, self.anime.id
             )
@@ -405,7 +427,7 @@ class EpisodeSelectorScreen(ShellScreen):
         old_page = self.selection.page_start
         self.selection.move(delta, len(self.episodes))
         if self.selection.page_start != old_page:
-            asyncio.create_task(self._render_page())
+            self.run_worker(self._render_page(), exclusive=True, group="episode-render")
         else:
             self._update_selection()
             self._update_info()
@@ -420,19 +442,19 @@ class EpisodeSelectorScreen(ShellScreen):
         if not self.episodes:
             return
         self.selection.page_move(delta, len(self.episodes))
-        asyncio.create_task(self._render_page())
+        self.run_worker(self._render_page(), exclusive=True, group="episode-render")
 
     def action_first(self) -> None:
         if not self.episodes:
             return
         self.selection.index = 0
-        asyncio.create_task(self._render_page())
+        self.run_worker(self._render_page(), exclusive=True, group="episode-render")
 
     def action_last(self) -> None:
         if not self.episodes:
             return
         self.selection.index = len(self.episodes) - 1
-        asyncio.create_task(self._render_page())
+        self.run_worker(self._render_page(), exclusive=True, group="episode-render")
 
     # ------------------------------------------------------------------
     # Actions

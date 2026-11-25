@@ -11,6 +11,8 @@ from typing import Iterable
 
 from textual.app import ComposeResult
 from textual.containers import Container, Grid, Horizontal, HorizontalScroll, Vertical
+from textual.events import Click
+from textual.message import Message
 from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Button, Input, Static
@@ -158,7 +160,6 @@ class SearchField(Container, can_focus=False):
                 id=self.input_id,
                 classes="search-input",
             )
-            field.can_focus = False
             yield field
             if self.hint_text:
                 yield Static(self.hint_text, classes="keycap")
@@ -173,9 +174,8 @@ class SearchField(Container, can_focus=False):
         field.focus()
 
     def blur_field(self) -> None:
-        field = self.field
-        field.can_focus = False
-        field.blur()
+        """Remove focus without disabling later mouse clicks."""
+        self.field.blur()
 
 
 class StateMessage(Static):
@@ -206,6 +206,12 @@ class PosterTile(Container, can_focus=False):
     """Poster-first card for grids. Selection never recomposes its poster."""
 
     selected = reactive(False)
+
+    class Chosen(Message):
+        def __init__(self, anime: Anime, source: PosterTile | None = None) -> None:
+            self.anime = anime
+            self.source = source
+            super().__init__()
 
     def __init__(
         self,
@@ -246,9 +252,21 @@ class PosterTile(Container, can_focus=False):
     def watch_selected(self, selected: bool) -> None:
         self.set_class(selected, "selected")
 
+    def on_click(self, event: Click) -> None:
+        if event.button != 1:
+            return
+        event.stop()
+        self.post_message(self.Chosen(self.anime, self))
+
 
 class FeaturedPanel(Container, can_focus=False):
     """Large hero presentation using only known anime data."""
+
+    class Chosen(Message):
+        def __init__(self, anime: Anime, source: FeaturedPanel | None = None) -> None:
+            self.anime = anime
+            self.source = source
+            super().__init__()
 
     def __init__(
         self,
@@ -301,6 +319,13 @@ class FeaturedPanel(Container, can_focus=False):
                     yield Button("▶  Watch", id="featured-watch", classes="action-button primary")
                     yield Button("ⓘ  Details", id="featured-details", classes="action-button ghost")
 
+    def on_click(self, event: Click) -> None:
+        # Buttons own their clicks; only the artwork/text area opens details.
+        if event.button != 1 or isinstance(event.target, Button):
+            return
+        event.stop()
+        self.post_message(self.Chosen(self.anime, self))
+
 
 class EpisodeStrip(Container, can_focus=False):
     """Episode overview derived from known episode counts and history."""
@@ -312,12 +337,14 @@ class EpisodeStrip(Container, can_focus=False):
         watched_episode: str | None = None,
         states: dict[str, str] | None = None,
         limit: int = 24,
+        total_override: int | None = None,
     ) -> None:
         super().__init__(classes="episode-strip")
         self.anime = anime
         self.watched_episode = watched_episode
         self.states = states or {}
         self.limit = limit
+        self.total_override = total_override
 
     @property
     def current_number(self) -> int | None:
@@ -327,7 +354,11 @@ class EpisodeStrip(Container, can_focus=False):
         return int(match.group(1)) if match else None
 
     def compose(self) -> ComposeResult:
-        total = self.anime.episodes or 0
+        total = (
+            self.total_override
+            if self.total_override is not None
+            else (self.anime.episodes or 0)
+        )
         if total <= 0:
             yield EmptyState("Episode information is unavailable for this title.")
             return

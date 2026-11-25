@@ -16,6 +16,10 @@ __version__ = "0.1.0-beta.1"
 VERSION = __version__
 APP_VERSION = VERSION
 
+# Beta builds default to the beta release channel; stable builds default to
+# stable.  Users can still override the channel in Settings.
+DEFAULT_UPDATE_CHANNEL = "beta" if "-" in VERSION else "stable"
+
 # The SQLite filename is internal, but kept in one place so migration can
 # locate the legacy file without sprinkling old brand strings through code.
 LEGACY_DATA_DIR_NAME = "AnimeHub"

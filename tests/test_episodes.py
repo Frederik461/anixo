@@ -27,6 +27,7 @@ from models.episode import (
 from screens.anime_details import AnimeDetailsScreen
 from screens.episode_selector import EpisodeCell, EpisodeSelectorScreen
 from services.ani_cli import AniCliInvocation, AniCliService
+from services.provider import ProviderEpisode
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +134,34 @@ def test_build_episodes_uses_supplied_entries_without_inventing() -> None:
     assert episodes[1].description == "Second"
     assert episodes[1].title is None
     assert episodes[2].title is None
+
+
+def test_build_episodes_stops_before_next_airing_episode() -> None:
+    anime = sample_anime(
+        episodes=25, status="RELEASING", next_airing_episode=9
+    )
+
+    episodes = build_episodes(anime)
+
+    assert [episode.number for episode in episodes] == [str(n) for n in range(1, 9)]
+
+
+def test_build_episodes_with_unknown_airing_progress_shows_only_known_episodes() -> None:
+    anime = sample_anime(episodes=25, status="RELEASING")
+
+    assert build_episodes(anime) == []
+
+    episodes = build_episodes(anime, states={"3": COMPLETED}, last_episode="4")
+    assert [episode.number for episode in episodes] == ["1", "2", "3", "4"]
+
+
+def test_provider_episode_list_is_not_capped_by_anilist() -> None:
+    anime = sample_anime(episodes=25, status="RELEASING", next_airing_episode=3)
+    entries = [{"number": str(number)} for number in range(1, 6)]
+
+    episodes = build_episodes(anime, entries=entries)
+
+    assert [episode.number for episode in episodes] == ["1", "2", "3", "4", "5"]
 
 
 def test_find_episode_matches_exact_then_numeric() -> None:
@@ -714,6 +743,29 @@ def test_selector_navigation_pagination_and_back(tmp_path: Path) -> None:
     asyncio.run(run())
 
 
+def test_refresh_airing_progress_recovers_missing_next_airing(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    anime = sample_anime(anilist_id=154587, episodes=25, status="RELEASING")
+
+    async def fake_details(anilist_id: int, *, refresh: bool = False):
+        assert anilist_id == 154587 and refresh is True
+        return sample_anime(
+            id=str(anilist_id),
+            anilist_id=anilist_id,
+            episodes=25,
+            status="RELEASING",
+            next_airing_episode=9,
+        )
+
+    app.api.details = fake_details  # type: ignore[method-assign]
+    refreshed = asyncio.run(app.refresh_airing_progress(anime))
+
+    assert refreshed.next_airing_episode == 9
+    assert [episode.number for episode in build_episodes(refreshed)] == [
+        str(number) for number in range(1, 9)
+    ]
+
+
 def test_selector_renders_source_groups_and_updates_info_panel(tmp_path: Path) -> None:
     app = make_app(tmp_path)
     anime = sample_anime(episodes=3)
@@ -765,6 +817,33 @@ def test_selector_renders_source_groups_and_updates_info_panel(tmp_path: Path) -
             assert "Part 1" in info("#episode-info-status")
             assert selector.query_one("#episode-prev").disabled is False
             assert selector.query_one("#episode-next").disabled is False
+
+    asyncio.run(run())
+
+
+def test_selector_uses_provider_released_episodes_without_explicit_entries(
+    tmp_path: Path,
+) -> None:
+    app = make_app(tmp_path)
+    anime = sample_anime(episodes=25, status="FINISHED")
+    app.database.upsert_anime(anime)
+    app.provider.episodes = lambda source_id: [  # type: ignore[method-assign]
+        ProviderEpisode("1", "1001", "Arrival"),
+        ProviderEpisode("2", "1002", "Departure"),
+    ]
+
+    async def run() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            app.open_episode_selector(anime)
+            await pilot.pause()
+            selector = app.screen
+            assert isinstance(selector, EpisodeSelectorScreen)
+            assert [episode.number for episode in selector.episodes] == ["1", "2"]
+            assert [episode.title for episode in selector.episodes] == [
+                "Arrival",
+                "Departure",
+            ]
 
     asyncio.run(run())
 

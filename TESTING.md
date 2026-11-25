@@ -20,7 +20,7 @@ been tested. Intel Mac builds are not published until independently tested.
 | Check | Result |
 | --- | --- |
 | `uv lock --check` | PASS — frozen lock resolves. |
-| `python -m pytest -q` | PASS — **203 passed** on real Windows; **202 passed, 1 skipped** on both GitHub-hosted macOS runners (the skip is the Windows-only cmd-wrapper integration test). |
+| `python -m pytest -q` | PASS — **251 passed** on real Windows on 2026-11-25 after the update work; **202 passed, 1 skipped** on both GitHub-hosted macOS runners at the earlier release check (the skip is the Windows-only cmd-wrapper integration test). The newer mouse, update, and release-manifest tests have not been run on macOS. |
 | `python -m compileall` / `py_compile` over source, services, platforms, screens, tests | PASS — no syntax errors. |
 | `uninstaller.py --version` / `--help` | PASS — standalone CLI starts and lists all options. |
 | `assets/make_icons.py` | PASS — ICO files contain 16/32/48/64/128/256 px frames and `anixo.png` source for `.icns`. |
@@ -41,7 +41,7 @@ been tested. Intel Mac builds are not published until independently tested.
 | Platform adapters | PASS — automated tests cover Windows/macOS/Linux data, cache, log and state paths, env overrides, shell conversion, installer roots, and portable trust. |
 | Persistent manifest | PASS — automated tests cover platform-specific filenames, atomic round trips, ownership fields, missing/corrupt/schema-mismatch quarantine, and separate Windows/macOS records. |
 | Dependency manager | PASS — automated tests cover ownership annotation, verified pinned installs, no-overwrite protection, digest-gated backfill, refusal of winget off Windows, and refusal to update unowned ani-cli. |
-| ani-cli update safety | PASS — `AniCliService.update()` is a hard refusal; Settings uses the checksum-pinned manager path instead. |
+| ani-cli update safety | PASS — `AniCliService.update()` is a hard refusal; Settings uses the checksum-pinned ownership/manifest path or the new verified `AniCliUpdateService`, both restricted to ANIXO-owned copies. |
 | Uninstall planner | PASS — automated tests cover app-only vs complete plans, no filesystem mutation during planning, unmanaged-dependency preservation, outside-root refusal, missing/corrupt manifest refusal, command planning, failure reporting, and config-pointer cleanup. |
 | Uninstall CLI | PASS — automated tests cover all flags, dry-run JSON/text output, safety exit code 2, app-only data preservation, complete removal, and pending-request round trips. |
 | `--record-install` | PASS — installer CLI writes a platform manifest with install kind, version, path and ownership metadata. |
@@ -60,6 +60,27 @@ been tested. Intel Mac builds are not published until independently tested.
 | Invalid provider ID | PASS — the same launcher exited with `Selected provider result is no longer available` and did not open a picker. |
 | No title-only exact playback | PASS — `spawn(exact=True)` without a provider ID and a history entry without a provider ID both refuse to launch instead of opening ani-cli's picker. |
 | Playback dependency preflight after setup | PASS — regression test runs `play_anime()` with `setup_completed=True`; real local config reports no missing required dependencies. |
+| Update release parsing and channels | PASS — deterministic tests cover GitHub and manifest feeds, stable/beta filtering, TTL caching, offline fallback, platform/arch/kind asset selection, and rejection of malformed manifests, non-HTTPS hosts, and uninstaller/helper assets. |
+| Staged download and package validation | PASS — deterministic tests cover streamed SHA-256 verification, size limits, ZIP path-traversal rejection, PE/DMG architecture checks, cancellation before download, helper selection, and fail-closed signature verification. |
+| Helper staging, rollback, and data preservation | PASS — deterministic tests cover plan validation, checksum re-verification, parent-process wait, backup/overlay for installer/portable/`.app` modes, health check, rollback on failure, and preservation of data/config/dependency files. |
+| Update center UI | PASS — automated Textual test checks all buttons, keyboard bindings, disabled states, release-notes and back actions, and route integration. |
+| ani-cli automatic update | PASS — deterministic tests cover known/owned revision detection, upstream digest lookup with offline cache, owned-only staged replacement, backup/rollback, and refusal for user-managed copies. |
+
+## Episode-release, mouse, and performance work (2026-11-24)
+
+| Check | Result |
+| --- | --- |
+| Full regression suite after all changes | PASS — **251 passed** on Windows 11, Python 3.12.10. |
+| Released-episode behavior | PASS — provider rows are authoritative and uncapped; AniList `nextAiringEpisode` is used only as a fallback cap for generated lists; `RELEASING` with no airing info shows locally known progress only; manual episode jump remains. Live check: planned 25, next airing 9, provider released 8 — both paths showed 1–8. |
+| Mouse interaction tests | PASS — 8 new tests cover nav/back/forward history, nav clicks while typing, card/poster/Watch clicks, a dedicated Discover cover click, keyboard-then-mouse mixing, season/episode cells, right-click rejection, wheel scrolling without selection changes, history rows, confirm/help buttons, and uninstall mode options. |
+| Pointer bug found by the new tests | FIXED — `DiscoverScreen`, `DashboardScreen`, and `WatchlistScreen` referenced `Message.sender`, which does not exist in Textual 8.2.8. Custom `Chosen` messages now carry an explicit `source` widget. |
+| Unsupported CSS pseudo-class | FIXED — Textual 8.2.8 rejects `:active`; hover/focus/disabled states are used instead and the full suite loads the stylesheet. |
+| Performance profiling | PASS — `benchmarks/perf_bench.py` stubs network services and records import, warm/cold startup, details, search, episodes, duplicate requests, cached posters, history lookup, and fixed-workload Python heap/CPU. |
+| Deterministic hotspot improvements | PASS — identical concurrent searches went from 6 posts / 1982.08 ms to 1 post / ~30 ms; 200 cached-poster lookups from 27.20 ms to ~5 ms; 20 history lookups from 175.43 ms to ~0.5 ms. |
+| UI-level speed claims | NOT CLAIMED — details/navigation/search/startup medians varied widely between runs and were dominated by fixed pilot pauses. Full table and caveats are in `benchmarks/README.md`. |
+| Manual pointer checklist | WRITTEN, NOT MANUALLY RUN — `MOUSE_ACCESSIBILITY.md` must be completed on real terminals on Windows 10/11 and Apple Silicon/Intel macOS before release. |
+| macOS compatibility of the new work | NOT TESTED — earlier macOS CI results predate these changes. |
+| Cold/warm startup, interactive time, memory/CPU | PARTIAL — measured on Windows only; no macOS comparison and no OS-level RSS/CPU profiler was used. |
 
 > **Intermittent test:** one older build run out of five failed
 > `tests/test_rendering.py::test_render_test_screen_reports_geometry_and_survives_interaction`
@@ -145,7 +166,7 @@ validated on a user Mac).
 | # | Item | Status | Notes |
 | --- | --- | --- | --- |
 | 1 | Dependency lock is reproducible (`uv lock --check`) | VERIFIED | Frozen lock used by the pipeline. |
-| 2 | Pytest suite passes | VERIFIED | 203 passed locally on Windows; 202 passed, 1 skipped on both macOS CI runners. |
+| 2 | Pytest suite passes | VERIFIED | 251 passed locally on Windows on 2026-11-25; 202 passed, 1 skipped on the earlier macOS CI runners. |
 | 3 | Icons and `.icns` source generated | VERIFIED | ICO frames and `anixo.png` confirmed locally. |
 | 4 | `anixo.spec`, `uninstaller.spec` build | VERIFIED | Windows one-folder and standalone uninstaller built. |
 | 5 | Packaging PowerShell scripts parse and execute | VERIFIED | Full pipeline completed with no `SKIP`/`FAIL`. |
@@ -165,7 +186,7 @@ validated on a user Mac).
 | 18a | Custom install-time data paths replayed by OS uninstall | VERIFIED | Silent validation: `uninstall-paths.ini` recorded custom data/cache/log dirs, the wrapper set `ANIXO_*`, removed the manifest/cache/logs, and Inno removed the INI and empty app folder. |
 | 18b | In-app handoff preserves custom data/cache/log/config paths | VERIFIED | Pending request records all paths and the standalone CLI restores them when `--execute-pending` is used. |
 | 18c | Uninstall progress and completion report | VERIFIED | Executor callback reports every selected item; CLI prints live progress plus explicit removed/kept/failed/manual sections. |
-| 18d | GitHub Actions release workflow syntax and semantics | VERIFIED | PyYAML parse and actionlint 1.7.12 passed; aggregated checksums use bare filenames and all six published assets are checked. |
+| 18d | GitHub Actions release workflow syntax and semantics | PARTIAL | PyYAML parse passed for the updated `release.yml` (3 jobs) and `macos.yml` (1 job); actionlint 1.7.12 passed on an earlier revision. The new helper/manifest/Intel steps and actionlint on the updated file have not been re-run in CI. |
 | 18e | macOS CI matrix definition | VERIFIED | `macos.yml` parses as YAML and passes actionlint; run 44929838262 executed both `macos-15` arm64 and `macos-15-intel` jobs successfully with full tests, build, validators, and artifact upload. |
 | 18f | macOS platform-specific tests | VERIFIED | New tests cover macOS adapter paths, app startup/quit, pinned dependency ownership, winget refusal, both uninstall modes, outside sentinels, and pre-existing dependency preservation. |
 | 19 | Portable launcher redirects data to `%LOCALAPPDATA%\ANIXO\Portable` | VERIFIED | Launcher variables verified; live first-run write from packaged ZIP not executed locally. |
@@ -174,10 +195,10 @@ validated on a user Mac).
 | 22 | macOS 15 ARM64 and Intel `.app`/DMG CI build | VERIFIED IN CI | Both jobs in run 44929838262 passed build, tests, architecture, packaging, runtime/uninstall validation, and artifact upload. Not run on a clean Mac. |
 | 23 | macOS Finder launch opens a usable terminal session | UNKNOWN | Bundled launcher writes a Terminal.app `open` command but has not been executed. |
 | 24 | macOS Gatekeeper/quarantine, signing and notarization | UNKNOWN | Depends on Apple credentials and a real Mac; unsigned fallback is documented. |
-| 25 | Intel Mac build/runtime | UNKNOWN | CI artifacts are uploaded only after the Intel job passes, but no Intel hardware, Finder, Gatekeeper, or playback validation has been performed; no public release asset is attached. |
+| 25 | Intel Mac build/runtime | UNKNOWN | CI artifacts and the release workflow now produce an x86_64 DMG, but no Intel hardware, Finder, Gatekeeper, or playback validation has been performed. |
 | 26 | Sixel/TGP terminals beyond the locally confirmed Windows Terminal | UNKNOWN | Requires real terminal testing. |
 | 27 | Direct Bash ani-cli playback path on macOS | UNKNOWN | Not executed on macOS. |
-| 28 | Real GitHub Releases update download/launch | UNKNOWN | Not run against a published release. |
+| 28 | Real GitHub Releases update download/launch against a published release | UNKNOWN | Parsing, selection, digest checks, staging, helper launch, and rollback are covered by deterministic tests, but no published release has been downloaded or applied end-to-end. The update feed URL must be supplied/published before testers can use it. |
 | 29 | Season/movie/special selection stays inside ANIXO | VERIFIED | Automated flow test plus live `debug` launcher check. |
 | 30 | Exact provider ID survives selection → episode fetch → playback | VERIFIED | Provider parser rejects other IDs; spawn test asserts `provider_id`, `-S 1`, and `-e <n>`. |
 | 31 | Remembered franchise selection is restored, not Season 1 | VERIFIED | Automated persistence test and selector preselection by exact source ID. |
@@ -187,6 +208,9 @@ validated on a user Mac).
 | 35 | macOS CI: packaging verified | VERIFIED IN CI | `.app` structure, `Info.plist`, resources, dynamic libraries, DMG mount, uninstaller, and checksums passed on both runners. |
 | 36 | macOS CI: code signing / notarization verified | UNVERIFIED | No Apple secrets were configured; both reports say UNVERIFIED rather than faking success. |
 | 37 | macOS CI: Finder / Gatekeeper / real playback | NOT TESTED BY DESIGN | Headless GitHub runners cannot establish these; reports always mark them as not tested. |
+| 38 | Manual mouse accessibility checklist | UNKNOWN | `MOUSE_ACCESSIBILITY.md` is written and automated event tests pass; no real-terminal run has been recorded on any platform. |
+| 39 | Post-change Windows benchmark comparison | VERIFIED | Deterministic hotspot improvements recorded in `benchmarks/README.md`; UI-level timing noise is documented, not claimed as a speedup. |
+| 40 | Post-change macOS benchmark comparison | UNKNOWN | Harness is portable but has not been run on Apple Silicon or Intel macOS. |
 
 ### macOS CI status reporting
 

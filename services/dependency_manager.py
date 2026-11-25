@@ -81,6 +81,10 @@ class DependencyManager:
     def _save(self) -> None:
         self.store.save(self.manifest)
 
+    def save(self) -> None:
+        """Public persistence seam for safe updater services."""
+        self._save()
+
     def sync_generated_artifacts(self) -> None:
         """Record verified ANIXO-generated runtime copies of ani-cli."""
         runtime = self.cache_dir / "runtime"
@@ -360,6 +364,39 @@ class DependencyManager:
             self._save()
             self.sync_generated_artifacts()
         return result
+
+    def record_ani_cli_update(
+        self,
+        *,
+        version: str,
+        source: str,
+        install_location: str,
+        sha256: str,
+        config_path: str = "",
+    ) -> InstallRecord:
+        """Record a completed safe ani-cli update in the ownership manifest."""
+        record = self.manifest.get(COMPONENT_ANI_CLI)
+        if not record or not record.installed_by_anixo:
+            raise ValueError("ani-cli is not ANIXO-managed; refusing to record an update.")
+        updated = replace(
+            record,
+            version=str(version),
+            source=str(source),
+            install_location=str(install_location),
+            expected_sha256=str(sha256).upper(),
+            observed_sha256=str(sha256).upper(),
+            installed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            install_method=record.install_method or "pinned-script",
+            paths=tuple(
+                path for path in (str(install_location),) if path
+            ),
+        )
+        self.manifest.upsert(updated)
+        if config_path:
+            self.config.ani_cli_path = str(config_path)
+        self.save()
+        self.sync_generated_artifacts()
+        return updated
 
     # ------------------------------------------------------------------
     # Backfill for installs from older ANIXO builds

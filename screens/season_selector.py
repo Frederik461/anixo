@@ -6,7 +6,6 @@ provider.  ani-cli's own anime picker is never used.
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -61,6 +60,8 @@ class FranchiseCell(Static):
         self.set_class(selected, "selected")
 
     def on_click(self, event: events.Click) -> None:
+        if event.button != 1:
+            return
         event.stop()
         self.post_message(self.Chosen(self.choice))
 
@@ -228,7 +229,7 @@ class SeasonSelectorScreen(ShellScreen):
         old_page = self.selection.page_start
         self.selection.move(delta, len(self.choices))
         if self.selection.page_start != old_page:
-            asyncio.create_task(self._render_page())
+            self.run_worker(self._render_page(), exclusive=True, group="season-render")
         else:
             for cell in self.query(FranchiseCell):
                 cell.selected = cell.choice is self.current_choice
@@ -250,19 +251,19 @@ class SeasonSelectorScreen(ShellScreen):
         if not self.choices:
             return
         self.selection.page_move(delta, len(self.choices))
-        asyncio.create_task(self._render_page())
+        self.run_worker(self._render_page(), exclusive=True, group="season-render")
 
     def action_first(self) -> None:
         if not self.choices:
             return
         self.selection.index = 0
-        asyncio.create_task(self._render_page())
+        self.run_worker(self._render_page(), exclusive=True, group="season-render")
 
     def action_last(self) -> None:
         if not self.choices:
             return
         self.selection.index = len(self.choices) - 1
-        asyncio.create_task(self._render_page())
+        self.run_worker(self._render_page(), exclusive=True, group="season-render")
 
     def action_franchise(self, delta: int) -> None:
         bounds = self._franchise_bounds()
@@ -275,7 +276,7 @@ class SeasonSelectorScreen(ShellScreen):
                 break
         target = max(0, min(len(bounds) - 1, current + delta))
         self.selection.index = bounds[target][0]
-        asyncio.create_task(self._render_page())
+        self.run_worker(self._render_page(), exclusive=True, group="season-render")
 
     async def action_choose(self) -> None:
         choice = self.current_choice

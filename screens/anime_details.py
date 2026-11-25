@@ -107,8 +107,18 @@ class AnimeDetailsScreen(ShellScreen):
                 anime = None
             if anime:
                 await asyncio.to_thread(self.app.database.upsert_anime, anime)
+        if anime:
+            anime = await self.app.refresh_airing_progress(anime)
         self.anime = anime
-        if not anime:
+        # Textual 8.2.x reports is_mounted=False during on_mount, so widget
+        # queries here can fail before the composed tree is attached.  Finish
+        # rendering on the next refresh instead.
+        self.call_after_refresh(self._finish_mount)
+
+    async def _finish_mount(self) -> None:
+        if not self.is_mounted or self.app.screen is not self:
+            return
+        if not self.anime:
             self.query_one("#detail-summary", Static).update("Anime not found.")
             self.query_one("#detail-episode-note", Static).update("")
             self._set_actions_enabled(False)
@@ -123,7 +133,7 @@ class AnimeDetailsScreen(ShellScreen):
 
     async def on_screen_resume(self) -> None:
         self._last_marked_episode = None
-        if self.anime:
+        if self.anime and self.is_mounted:
             await self._load_progress()
 
     async def refresh_progress(self) -> None:
@@ -134,7 +144,7 @@ class AnimeDetailsScreen(ShellScreen):
     # Rendering
 
     def _render_poster(self) -> None:
-        if not self.anime:
+        if not self.anime or not self.is_mounted:
             return
         compact = self.has_class("compact")
         poster = self.query_one(".detail-poster", Poster)
@@ -146,7 +156,7 @@ class AnimeDetailsScreen(ShellScreen):
         poster.url = self.anime.cover_url
 
     async def _load_progress(self) -> None:
-        if not self.anime:
+        if not self.anime or not self.is_mounted:
             return
         entry = await asyncio.to_thread(
             self.app.database.find_history_for_anime, self.anime
@@ -218,18 +228,19 @@ class AnimeDetailsScreen(ShellScreen):
         host = self.query_one("#detail-episode-strip-host", Vertical)
         note = self.query_one("#detail-episode-note", Static)
         await host.remove_children()
-        if self.anime.episodes:
+        if self.episodes:
             note.update("Use Select Episode to browse and play a specific episode.")
             await host.mount(
                 EpisodeStrip(
                     self.anime,
                     watched_episode=self.entry.episode if self.entry else None,
                     states=self.states,
+                    total_override=len(self.episodes),
                 )
             )
         else:
             note.update(
-                "Episode information is unavailable for this title. "
+                "No released episodes are known for this title yet. "
                 "Select Episode still lets you enter a number directly."
             )
 
@@ -271,7 +282,9 @@ class AnimeDetailsScreen(ShellScreen):
     def action_watch(self) -> None:
         self._last_marked_episode = None
         if self.anime:
-            asyncio.create_task(self.app.watch_anime(self.anime))
+            self.run_worker(
+                self.app.watch_anime(self.anime), exclusive=True, group="details-watch"
+            )
 
     def action_select_episode(self) -> None:
         self._last_marked_episode = None

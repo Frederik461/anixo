@@ -8,12 +8,33 @@ from textual import on, work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
+from textual.events import Click
+from textual.message import Message
 from textual.widgets import Input, Static
 
 from components.shell import ShellScreen
 from components.ui import EmptyState, SearchField, SectionHeading
 from models.anime import HistoryEntry
 from screens.dashboard import relative_time
+
+
+class HistoryRow(Static):
+    """A history entry that can be activated with a mouse click."""
+
+    class Chosen(Message):
+        def __init__(self, entry: HistoryEntry) -> None:
+            self.entry = entry
+            super().__init__()
+
+    def __init__(self, entry: HistoryEntry, text: str) -> None:
+        super().__init__(text, classes="history-row")
+        self.entry = entry
+
+    def on_click(self, event: Click) -> None:
+        if event.button != 1:
+            return
+        event.stop()
+        self.post_message(self.Chosen(self.entry))
 
 
 class HistoryScreen(ShellScreen):
@@ -98,7 +119,7 @@ class HistoryScreen(ShellScreen):
                 f"[cyan]{episode}[/cyan]  {entry.anime.display_title()}  "
                 f"[dim]• {watched} • {source}[/dim]"
             )
-            row = Static(text, classes="history-row")
+            row = HistoryRow(entry, text)
             row.set_class(index == self.selection_index, "selected")
             container.mount(row)
 
@@ -116,10 +137,22 @@ class HistoryScreen(ShellScreen):
         self.selection_index = 0
         self.render_rows()
 
+    @on(HistoryRow.Chosen)
+    async def on_row_chosen(self, event: HistoryRow.Chosen) -> None:
+        event.stop()
+        entries = self.filtered_entries
+        if event.entry in entries:
+            self.selection_index = entries.index(event.entry)
+            self.render_rows()
+        await self._watch_entry(event.entry)
+
     async def action_watch(self) -> None:
         entries = self.filtered_entries
         if 0 <= self.selection_index < len(entries):
-            await self.app.play_history_entry(entries[self.selection_index])
+            await self._watch_entry(entries[self.selection_index])
+
+    async def _watch_entry(self, entry: HistoryEntry) -> None:
+        await self.app.play_history_entry(entry)
 
     @work
     async def action_remove(self) -> None:

@@ -75,6 +75,18 @@ jobs:
           .\dist\ANIXO-Uninstaller.exe --version
           if ($LASTEXITCODE -ne 0) { throw 'Uninstaller validation failed.' }
 
+      - name: Build standalone updater helper
+        shell: pwsh
+        run: |
+          uv run --group build pyinstaller --noconfirm --clean --onefile --console --name ANIXO-Updater `
+            --specpath build-updater --distpath dist\updater --workpath build-updater-work `
+            updater_helper.py
+          if ($LASTEXITCODE -ne 0) { throw 'Updater helper build failed.' }
+          New-Item -ItemType Directory -Force -Path dist\release | Out-Null
+          Copy-Item -LiteralPath dist\updater\ANIXO-Updater.exe -Destination "dist\release\ANIXO-Updater-windows-x64.exe" -Force
+          .\dist\release\ANIXO-Updater-windows-x64.exe --help
+          if ($LASTEXITCODE -ne 0) { throw 'Updater helper validation failed.' }
+
       - name: Build one-file validation app
         shell: pwsh
         run: |
@@ -147,6 +159,7 @@ jobs:
             "dist\release\ANIXO-Setup-v$env:APP_VERSION.exe",
             "dist\release\ANIXO-Uninstaller-v$env:APP_VERSION.exe",
             "dist\release\ANIXO-Portable-v$env:APP_VERSION.zip",
+            'dist\release\ANIXO-Updater-windows-x64.exe',
             'dist\release\SHA256SUMS.txt'
           )
           foreach ($item in $required) {
@@ -162,6 +175,7 @@ jobs:
             dist/release/ANIXO-Setup-v${{ env.APP_VERSION }}.exe
             dist/release/ANIXO-Uninstaller-v${{ env.APP_VERSION }}.exe
             dist/release/ANIXO-Portable-v${{ env.APP_VERSION }}.zip
+            dist/release/ANIXO-Updater-windows-x64.exe
             dist/release/SHA256SUMS.txt
           if-no-files-found: error
 
@@ -174,6 +188,8 @@ jobs:
         include:
           - os: macos-15
             arch: arm64
+          - os: macos-15-intel
+            arch: x86_64
     env:
       APP_VERSION: 0.1.0-beta.1
 
@@ -207,6 +223,20 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: bash packaging/build_macos.sh "$APP_VERSION"
 
+      - name: Build macOS updater helper
+        run: |
+          set -euo pipefail
+          arch="${{ matrix.arch }}"
+          helper_dir="dist/release/macos-${arch}/helper"
+          uv run --group build pyinstaller --noconfirm --clean --onefile --console \
+            --name ANIXO-Updater \
+            --distpath "$helper_dir" \
+            --workpath "build/macos-${arch}/updater" \
+            updater_helper.py
+          chmod +x "$helper_dir/ANIXO-Updater"
+          (cd "$helper_dir" && zip -j "../ANIXO-Updater-macos-${arch}.zip" ANIXO-Updater)
+          (cd "dist/release/macos-${arch}" && shasum -a 256 "ANIXO-Updater-macos-${arch}.zip" >> SHA256SUMS.txt)
+
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -214,6 +244,7 @@ jobs:
           path: |
             dist/release/macos-${{ matrix.arch }}/ANIXO-v${{ env.APP_VERSION }}-macos-${{ matrix.arch }}.dmg
             dist/release/macos-${{ matrix.arch }}/ANIXO-Uninstaller-v${{ env.APP_VERSION }}-macos-${{ matrix.arch }}
+            dist/release/macos-${{ matrix.arch }}/ANIXO-Updater-macos-${{ matrix.arch }}.zip
             dist/release/macos-${{ matrix.arch }}/SHA256SUMS.txt
           if-no-files-found: error
 
@@ -225,6 +256,9 @@ jobs:
       APP_VERSION: 0.1.0-beta.1
 
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
       - name: Derive version from tag
         run: |
           ref="${GITHUB_REF_NAME}"
@@ -249,8 +283,13 @@ jobs:
             "ANIXO-Setup-v${APP_VERSION}.exe"
             "ANIXO-Uninstaller-v${APP_VERSION}.exe"
             "ANIXO-Portable-v${APP_VERSION}.zip"
+            "ANIXO-Updater-windows-x64.exe"
             "ANIXO-v${APP_VERSION}-macos-arm64.dmg"
             "ANIXO-Uninstaller-v${APP_VERSION}-macos-arm64"
+            "ANIXO-Updater-macos-arm64.zip"
+            "ANIXO-v${APP_VERSION}-macos-x86_64.dmg"
+            "ANIXO-Uninstaller-v${APP_VERSION}-macos-x86_64"
+            "ANIXO-Updater-macos-x86_64.zip"
             "SHA256SUMS.txt"
           )
           for item in "${expected[@]}"; do
@@ -259,33 +298,55 @@ jobs:
               exit 1
             fi
           done
-          if [ "$(wc -l < dist/release/SHA256SUMS.txt)" -ne 5 ]; then
-            echo "Expected five checksummed release assets." >&2
+          if [ "$(wc -l < dist/release/SHA256SUMS.txt)" -ne 10 ]; then
+            echo "Expected ten checksummed release assets." >&2
             exit 1
           fi
           cat dist/release/SHA256SUMS.txt
+
+      - name: Write release notes and generate update manifest
+        run: |
+          set -euo pipefail
+          cat > dist/release/RELEASE_NOTES.txt <<EOF
+          ANIXO v${APP_VERSION} — Your anime. Your world.
+
+          Windows x64 setup, portable ZIP, and standalone uninstaller.
+          macOS 13+ Apple Silicon and Intel x86_64 DMGs. Every platform ships a
+          standalone updater helper. Signing/notarization status is documented
+          in TESTING.md and is not assumed.
+
+          Automatic updates read release-manifest.json from this release. Downloads
+          are pinned to SHA-256 digests and the old installation is restored if the
+          staged helper cannot verify or start the new build.
+
+          Verify downloads with the aggregated SHA256SUMS.txt.
+          EOF
+          python3 packaging/make_release_manifest.py \
+            --release-dir dist/release \
+            --version "$APP_VERSION" \
+            --base-url "https://github.com/${{ github.repository }}/releases/download/v${APP_VERSION}" \
+            --notes-file dist/release/RELEASE_NOTES.txt \
+            --output dist/release/release-manifest.json
+          python3 -c "import json,pathlib; d=json.loads(pathlib.Path('dist/release/release-manifest.json').read_text()); assert d['schema_version']==1; assert d['assets']; print('Manifest verified:', d['channel'], len(d['assets']), 'assets')"
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.APP_VERSION }}
           name: ANIXO v${{ env.APP_VERSION }}
-          body: |
-            ANIXO v${{ env.APP_VERSION }} — Your anime. Your world.
-
-            Windows x64 setup, portable ZIP, and standalone uninstaller.
-            macOS 13+ Apple Silicon DMG built on a macOS 15 arm64 runner.
-            Intel Mac builds are not published until independently tested.
-            Signing/notarization status is shown in TESTING.md for each build.
-            Verify downloads with the aggregated SHA256SUMS.txt.
-
-            No Python, pip, uv, Git, or Homebrew is needed for the packaged apps.
+          body_path: dist/release/RELEASE_NOTES.txt
           prerelease: ${{ contains(env.APP_VERSION, '-') }}
           draft: false
           files: |
             dist/release/ANIXO-Setup-v${{ env.APP_VERSION }}.exe
             dist/release/ANIXO-Uninstaller-v${{ env.APP_VERSION }}.exe
             dist/release/ANIXO-Portable-v${{ env.APP_VERSION }}.zip
+            dist/release/ANIXO-Updater-windows-x64.exe
             dist/release/ANIXO-v${{ env.APP_VERSION }}-macos-arm64.dmg
             dist/release/ANIXO-Uninstaller-v${{ env.APP_VERSION }}-macos-arm64
+            dist/release/ANIXO-Updater-macos-arm64.zip
+            dist/release/ANIXO-v${{ env.APP_VERSION }}-macos-x86_64.dmg
+            dist/release/ANIXO-Uninstaller-v${{ env.APP_VERSION }}-macos-x86_64
+            dist/release/ANIXO-Updater-macos-x86_64.zip
             dist/release/SHA256SUMS.txt
+            dist/release/release-manifest.json

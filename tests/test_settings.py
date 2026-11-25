@@ -142,7 +142,7 @@ def test_system_category_opens_installation_subsection(tmp_path: Path) -> None:
             screen = app.screen
             assert isinstance(screen, SettingsScreen)
 
-            for _ in range(5):
+            for _ in range(7):
                 await pilot.press("right")
                 await pilot.pause()
             assert screen.section_name == "System"
@@ -174,10 +174,11 @@ def test_settings_confirm_action_works_from_normal_action(tmp_path: Path) -> Non
             screen = app.screen
             assert isinstance(screen, SettingsScreen)
 
-            await pilot.press("right")
-            await pilot.press("right")
-            await pilot.pause()
-            for _ in range(6):
+            for _ in range(4):
+                await pilot.press("right")
+                await pilot.pause()
+            assert screen.section_name == "Dependencies"
+            for _ in range(7):
                 await pilot.press("down")
                 await pilot.pause()
             assert screen.current_row is not None

@@ -1,8 +1,8 @@
 # Troubleshooting ANIXO
 
-ANIXO v0.1.0-beta.1 is a terminal application for Windows x64 and macOS 13+
-Apple Silicon. Most problems fall into the categories below. Start by
-collecting diagnostics.
+ANIXO v0.1.0-beta.1 is a terminal application for Windows 10/11 x64 and macOS
+13+ (Apple Silicon and Intel x86_64). Most problems fall into the categories
+below. Start by collecting diagnostics.
 
 Windows:
 
@@ -122,9 +122,42 @@ credentials. If macOS refuses to open it:
   "E:\AnimeOnTheGo\START ANIXO.cmd"
   ```
 
-* Updating a portable copy means extracting a newer ZIP over the folder. The
-  data folder is not inside the ZIP and is left untouched.
+* Automatic updates also work for portable copies: the helper overlays the new
+  portable ZIP onto the install folder and leaves the separate data folder
+  untouched. Manual extraction of a newer ZIP is still supported.
 * `PORTABLE.md` inside the ZIP summarises these differences.
+
+## Update problems
+
+Press `U` to open the Update Center. Buttons and keys do the same thing: `C`
+check, `U` update, `X` cancel, `R` restart + install, `N` release notes.
+Settings → Updates shows the channel, automatic-check toggle, latest version,
+status, last check, feed URL, and optional manifest public key.
+
+* **"No compatible update exists"** means the release has no asset for your
+  platform/architecture and preferred install kind. Check the architecture line
+  in `--diagnose` and use the manual download for that platform instead.
+* **"outside the trusted update source"** means the manifest points at a
+  non-HTTPS URL or a host that is neither GitHub nor the configured feed host.
+  ANIXO deliberately refuses it. Do not bypass this by disabling verification.
+* **"checksum mismatch"** stops the update before any file is opened or run.
+  Delete the staged file from the data directory's `updates/staging` folder and
+  check again; report the release asset if it repeats.
+* **"signature FAILED"** occurs when `update_public_key` is set but the manifest
+  is unsigned or its signature does not verify. Confirm the key belongs to the
+  release publisher, or clear the key if you intentionally rely on pinned
+  checksums only.
+* **No beta shown on a stable channel** is correct: stable builds never receive
+  pre-releases. Switch the channel in Settings → Updates only if you accept
+  beta risk.
+* **The helper reports a rollback** means the new build failed its health check;
+  the backed-up installation was restored. Check the redacted update log in the
+  data directory, then retry or install manually.
+* **A manual check appears cached** is normal: checks have a short TTL. Use the
+  explicit Check action to refresh; offline checks fall back to the last good
+  result so a network outage does not look like an available update.
+* Never run an updater helper or installer received outside an official release
+  or your configured trusted feed. ANIXO does not execute unverified downloads.
 
 ## Uninstalling and leftovers
 

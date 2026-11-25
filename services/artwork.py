@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -68,7 +69,21 @@ class ArtworkService:
         self.process_count = 0
         self._download_locks: dict[str, asyncio.Lock] = {}
         self._process_locks: dict[str, asyncio.Lock] = {}
-        self._colors: dict[str, str] = {}
+        self._colors: OrderedDict[str, str] = OrderedDict()
+        self._color_limit = 256
+        self._lock_limit = 256
+        self._image_slots = asyncio.Semaphore(6)
+
+    def _lock(self, store: dict[str, asyncio.Lock], key: str) -> asyncio.Lock:
+        """Return a shared lock, pruning stale entries to bound memory use."""
+        lock = store.get(key)
+        if lock is None:
+            if len(store) >= self._lock_limit:
+                for stale in list(store)[: self._lock_limit // 2]:
+                    if not store[stale].locked():
+                        del store[stale]
+            lock = store.setdefault(key, asyncio.Lock())
+        return lock
 
     def invalidate(self) -> None:
         """Discard results belonging to an older cache generation."""
@@ -103,29 +118,57 @@ class ArtworkService:
                 cached, url, width, height, renderer, cell_size, generation, True
             )
 
-        lock = self._process_locks.setdefault(key.digest(), asyncio.Lock())
-        async with lock:
-            cached = await asyncio.to_thread(self.cache.get_processed, key)
-            if cached:
-                return await self._result_from_processed(
-                    cached, url, width, height, renderer, cell_size, generation, True
-                )
+        # Cache hits return above. Bound only downloads and PIL work so a large
+        # grid cannot saturate the thread pool or the network.
+        async with self._image_slots:
+            lock = self._lock(self._process_locks, key.digest())
+            async with lock:
+                cached = await asyncio.to_thread(self.cache.get_processed, key)
+                if cached:
+                    return await self._result_from_processed(
+                        cached, url, width, height, renderer, cell_size, generation, True
+                    )
 
-            original = await self._ensure_original(url)
-            if original is None or generation != self.generation:
-                return None
+                original = await self._ensure_original(url)
+                if original is None or generation != self.generation:
+                    return None
 
-            source_size = await asyncio.to_thread(self._source_size, original)
-            if source_size is None:
-                return None
-            layout = self._layout(width, source_size, renderer, cell_size)
+                source_size = await asyncio.to_thread(self._source_size, original)
+                if source_size is None:
+                    return None
+                layout = self._layout(width, source_size, renderer, cell_size)
 
-            if layout.pixel_size == source_size:
-                # The original is already the exact raster the renderer wants.
-                # Hand it straight to textual-image: no resize, no re-encode,
-                # and no duplicate processed cache entry.
+                if layout.pixel_size == source_size:
+                    # Already the exact raster the renderer wants; reuse it.
+                    return ArtworkResult(
+                        path=original,
+                        url=url,
+                        width=width,
+                        height=height,
+                        generation=generation,
+                        cell_rows=layout.cell_rows,
+                        render_width=layout.render_width,
+                        source_size=source_size,
+                        pixel_size=layout.pixel_size,
+                        source_path=original,
+                        from_cache=False,
+                        upscaled=False,
+                    )
+
+                self.process_count += 1
+                try:
+                    image = await asyncio.to_thread(
+                        self._process, original, layout.pixel_size
+                    )
+                except (OSError, ValueError, UnidentifiedImageError):
+                    return None
+                if generation != self.generation:
+                    return None
+
+                path = await asyncio.to_thread(self.cache.store_processed, key, image)
+                await asyncio.to_thread(self.cache.cleanup)
                 return ArtworkResult(
-                    path=original,
+                    path=path,
                     url=url,
                     width=width,
                     height=height,
@@ -136,37 +179,13 @@ class ArtworkService:
                     pixel_size=layout.pixel_size,
                     source_path=original,
                     from_cache=False,
-                    upscaled=False,
+                    upscaled=layout.upscaled,
                 )
-
-            self.process_count += 1
-            try:
-                image = await asyncio.to_thread(self._process, original, layout.pixel_size)
-            except (OSError, ValueError, UnidentifiedImageError):
-                return None
-            if generation != self.generation:
-                return None
-
-            path = await asyncio.to_thread(self.cache.store_processed, key, image)
-            self.cache.cleanup()
-            return ArtworkResult(
-                path=path,
-                url=url,
-                width=width,
-                height=height,
-                generation=generation,
-                cell_rows=layout.cell_rows,
-                render_width=layout.render_width,
-                source_size=source_size,
-                pixel_size=layout.pixel_size,
-                source_path=original,
-                from_cache=False,
-                upscaled=layout.upscaled,
-            )
 
     async def cover_color(self, url: str) -> str:
         """Return a stable average color for the placeholder while art loads."""
         if url in self._colors:
+            self._colors.move_to_end(url)
             return self._colors[url]
         original = await self._ensure_original(url)
         if original is None:
@@ -176,6 +195,9 @@ class ArtworkService:
         except (OSError, UnidentifiedImageError):
             color = "#a78bfa"
         self._colors[url] = color
+        self._colors.move_to_end(url)
+        while len(self._colors) > self._color_limit:
+            self._colors.popitem(last=False)
         return color
 
     # ------------------------------------------------------------------
@@ -302,7 +324,7 @@ class ArtworkService:
         existing = await asyncio.to_thread(self.cache.get_original, url)
         if existing:
             return existing
-        lock = self._download_locks.setdefault(url, asyncio.Lock())
+        lock = self._lock(self._download_locks, url)
         async with lock:
             existing = await asyncio.to_thread(self.cache.get_original, url)
             if existing:
@@ -311,7 +333,7 @@ class ArtworkService:
             data = await self._download(url)
             if not data:
                 return None
-            extension = self._image_extension(data)
+            extension = await asyncio.to_thread(self._image_extension, data)
             if not extension:
                 return None
             return await asyncio.to_thread(self.cache.store_original, url, data, extension)
@@ -334,7 +356,7 @@ class ArtworkService:
                         if len(buffer) > self.max_original_bytes:
                             return None
                     data = bytes(buffer)
-            self._validate(data)
+            await asyncio.to_thread(self._validate, data)
             return data
         except (httpx.HTTPError, OSError, ValueError, UnidentifiedImageError):
             return None

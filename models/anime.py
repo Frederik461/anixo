@@ -112,6 +112,22 @@ class AnimeTitle:
         return {"english": self.english, "romaji": self.romaji, "native": self.native}
 
 
+def _parse_next_airing(data: Mapping[str, Any]) -> int | None:
+    """Read AniList's next unaired episode number from a media mapping."""
+    value = data.get("nextAiringEpisode")
+    if value is None:
+        value = data.get("next_airing_episode")
+    if isinstance(value, Mapping):
+        value = value.get("episode")
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
 @dataclass(slots=True)
 class Anime:
     id: str
@@ -127,6 +143,7 @@ class Anime:
     average_score: int | None = None
     popularity: int | None = None
     status: str | None = None
+    next_airing_episode: int | None = None
     genres: tuple[str, ...] = ()
     studios: tuple[str, ...] = ()
     is_adult: bool = False
@@ -207,6 +224,7 @@ class Anime:
             average_score=data.get("averageScore") or data.get("average_score"),
             popularity=data.get("popularity"),
             status=data.get("status"),
+            next_airing_episode=_parse_next_airing(data),
             genres=tuple(str(item) for item in raw_genres),
             studios=tuple(studio_names),
             is_adult=bool(data.get("isAdult") or data.get("is_adult") or False),
@@ -237,6 +255,11 @@ class Anime:
             "averageScore": self.average_score,
             "popularity": self.popularity,
             "status": self.status,
+            "nextAiringEpisode": (
+                {"episode": self.next_airing_episode}
+                if self.next_airing_episode is not None
+                else None
+            ),
             "genres": list(self.genres),
             "studios": list(self.studios),
             "isAdult": self.is_adult,

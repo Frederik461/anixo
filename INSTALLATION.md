@@ -27,7 +27,9 @@ Open the project's **Releases** page and download the assets for your platform:
 | `ANIXO-Portable-v0.1.0-beta.1.zip` | Windows x64 | You want a no-install copy, for example on a USB drive. |
 | `ANIXO-v0.1.0-beta.1-macos-arm64.dmg` | macOS 13+ Apple Silicon | You want the drag-and-drop `.app` bundle. |
 | `ANIXO-Uninstaller-v0.1.0-beta.1-macos-arm64` | macOS 13+ Apple Silicon | Companion standalone uninstaller. |
+| `ANIXO-Updater-windows-x64.exe` / `ANIXO-Updater-macos-*.zip` | All | Standalone helper used by automatic updates. |
 | `SHA256SUMS.txt` | All | You want to verify the downloads. |
+| `release-manifest.json` | All | Pinned download URLs and digests used by the in-app updater. |
 
 A separate macOS CI matrix also uploads `ANIXO-macOS-ARM64.dmg` and
 `ANIXO-macOS-Intel.dmg` build artifacts when their respective jobs pass.
@@ -148,16 +150,45 @@ auto-detection does not find them.
 
 Legacy environment variables `ANIME_HUB_DATA_DIR` and `ANIME_HUB_CONFIG` still
 work as aliases. New overrides are `ANIXO_DATA_DIR`, `ANIXO_CONFIG`,
-`ANIXO_CACHE_DIR`, `ANIXO_LOG_DIR`, and `ANIXO_UPDATE_REPO`.
+`ANIXO_CACHE_DIR`, `ANIXO_LOG_DIR`, `ANIXO_UPDATE_REPO`, and
+`ANIXO_UPDATER_HELPER` (path to a trusted standalone helper). Repository URLs,
+feed URLs, and optional public keys are stored as Settings values, never as
+credentials.
 
 Legacy AnimeHub data is only ever read for migration. Migration creates a
 backup and never deletes the old folder or overwrites existing ANIXO data.
 
 ## 7. Update
 
-1. Download the newer installer or DMG for your platform.
-2. Run the installer / replace `ANIXO.app` in Applications.
-3. Your settings, history, watchlist, progress, and ownership manifest are kept.
+### Automatic (recommended)
+
+Press `U`, or go to Settings → Updates → **Open update center**. Choose your
+channel in Settings → Updates (`beta` is the default for `0.1.0-beta.1`; stable
+builds default to `stable` and never receive betas). **Check** uses GitHub
+Releases or a configured HTTPS feed; **Update ANIXO** downloads only after you
+approve. **Cancel** stays available until installation begins. Once the staged
+package is verified, choose **Restart + install** (or `R`): ANIXO closes, a
+separate helper backs up the old program files, applies the update, checks the
+new build, and restores the backup if anything fails. **Release notes** (`N`)
+shows the manifest notes. The update center works fully with the mouse.
+
+Downloads must be HTTPS, are pinned to SHA-256 digests, and are checked for a
+valid package structure before use. An optional manifest signature can be
+required by setting `update_public_key` to a PEM public key file; if configured,
+a missing or invalid signature blocks the update. No GitHub token or other
+credential is stored by ANIXO. Redacted update events are written to the data
+directory.
+
+Your settings, history, watchlist, progress, playback preferences,
+user-installed dependencies, shortcuts, and ownership manifest are kept.
+
+### Manual
+
+1. Download the newer installer or DMG for your platform and verify it against
+   `SHA256SUMS.txt`.
+2. Run the installer / replace `ANIXO.app` in Applications / extract the portable
+   ZIP over the existing portable folder (portable data lives outside the ZIP).
+3. Your personal data and ownership manifest are kept.
 
 Back up your data folder before updating between beta versions if you rely on
 its contents.

@@ -14,11 +14,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from textual import on
 from textual.app import App, ComposeResult, SuspendNotSupported
 from textual.binding import Binding
-from textual.containers import Container
+from textual.containers import Container, Horizontal
 from textual.screen import ModalScreen
-from textual.widgets import Input, Static
+from textual.widgets import Button, Input, Static
 
 from components.confirm_dialog import ConfirmDialog
 from components.resume_dialog import ResumeDialog
@@ -49,8 +50,10 @@ from screens.render_test import RenderTestScreen
 from screens.season_selector import SeasonSelectorScreen
 from screens.setup import SetupScreen
 from screens.settings import SettingsScreen
+from screens.updates import UpdateScreen
 from screens.watchlist import WatchlistScreen
 from services.ani_cli import AniCliService
+from services.ani_cli_updater import AniCliUpdateService
 from services.anime_api import AnimeAPI
 from services.dependency_manager import DependencyManager
 from services.franchise import Franchise, group_franchises
@@ -68,7 +71,12 @@ from services.uninstall import (
     UninstallSafetyError,
     write_pending,
 )
-from services.updater import ReleaseInfo, UpdateService
+from services.updater import (
+    DownloadProgress,
+    ReleaseInfo,
+    UpdateService,
+    UpdateState,
+)
 from version import APP_NAME, APP_TAGLINE, DATABASE_NAME, LEGACY_DATABASE_NAME, VERSION
 
 _CSS = ""  # Styles live in styles/theme.tcss.
@@ -94,6 +102,7 @@ class HelpScreen(ModalScreen[None]):
             yield Static(
                 "D / G / W / H / S   Jump to a screen\n"
                 "Tab / Shift+Tab     Cycle screens\n"
+                "Alt+← / Alt+→       Back / forward\n"
                 "← / →               Move selection\n"
                 "↑ / ↓               Section / page / row\n"
                 "Enter               Watch, resume, or open\n"
@@ -114,6 +123,13 @@ class HelpScreen(ModalScreen[None]):
                 "Q                   Quit",
                 classes="help-body",
             )
+            with Horizontal(classes="help-actions"):
+                yield Button("Close", id="help-close", classes="action-button primary")
+
+    @on(Button.Pressed, "#help-close")
+    def on_help_close(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.app.pop_screen()
 
 
 class AnixoApp(App[None]):
@@ -126,6 +142,7 @@ class AnixoApp(App[None]):
         Binding("W", "goto_watchlist", "Watchlist", show=False),
         Binding("H", "goto_history", "History", show=False),
         Binding("S", "goto_settings", "Settings", show=False),
+        Binding("U", "open_updates", "Updates", show=False),
         Binding("V", "goto_render_test", "Image test", show=False),
         Binding("X", "goto_diagnostics", "Diagnostics", show=False),
         Binding("question_mark,f1", "help", "Help"),
@@ -137,6 +154,8 @@ class AnixoApp(App[None]):
             show=False,
             priority=True,
         ),
+        Binding("alt+left", "navigate_back", "Back", show=False),
+        Binding("alt+right", "navigate_forward", "Forward", show=False),
         Binding("q", "quit", "Quit", show=False),
         Binding("escape", "goto_dashboard", "Dashboard", show=False),
     ]
@@ -219,13 +238,28 @@ class AnixoApp(App[None]):
         self.api = AnimeAPI(self.config, self.database)
         self.ani_cli = AniCliService(self.config)
         self.provider = ProviderService(self.ani_cli.provider_base_url())
-        self.updates = UpdateService(self.config)
+        self.updates = UpdateService(self.config, data_dir=self.data_dir, adapter=self.platform)
+        self.ani_cli_updates = AniCliUpdateService(
+            self.config,
+            self.data_dir,
+            ani_cli=self.ani_cli,
+            manager=self.dependencies,
+            adapter=self.platform,
+        )
+        self.update_state = UpdateState(
+            current=VERSION, channel=self.config.update_channel
+        )
+        self.ani_cli_status = self.ani_cli_updates.detect_installed()
+        self.ani_cli_check = None
+        self._update_cancel: asyncio.Event | None = None
         self._playback_in_progress = False
         self._playback_ready: bool | None = None
         self._force_setup = bool(force_setup)
         self._setup_screen: SetupScreen | None = None
         self._setup_snapshot: SetupSnapshot | None = None
         self._update_status = "No update check yet."
+        self._route_history: list[type] = []
+        self._route_index = -1
 
     def _adopt_same_directory_database(self) -> None:
         """Copy an in-place legacy database when no ANIXO database exists."""
@@ -275,10 +309,12 @@ class AnixoApp(App[None]):
                 source,
                 self.config.metadata_ttl_hours,
             )
-            await asyncio.to_thread(
-                import_legacy_artwork, source, self.image_cache, self.database
+            await asyncio.gather(
+                asyncio.to_thread(
+                    import_legacy_artwork, source, self.image_cache, self.database
+                ),
+                asyncio.to_thread(self.ani_cli.import_history, self.database),
             )
-            await asyncio.to_thread(self.ani_cli.import_history, self.database)
 
         needs_setup = not self.config.setup_completed or self._force_setup
         # Headless runs are automation; the wizard is for an interactive shell.
@@ -288,7 +324,22 @@ class AnixoApp(App[None]):
             await self.push_screen(self._setup_screen)
         else:
             await self.push_screen(DashboardScreen())
+            self._remember_route(DashboardScreen)
+        self.call_after_refresh(self._sync_navigation_buttons)
         self.call_after_refresh(self._focus_route_content)
+        self.call_after_refresh(self._notify_applied_update)
+        if not self.is_headless and self.config.check_for_app_updates:
+            self.run_worker(
+                self._auto_check_updates(),
+                exclusive=True,
+                group="update-check",
+            )
+        if not self.is_headless and self.config.check_for_ani_cli_updates:
+            self.run_worker(
+                self._auto_check_ani_cli_updates(),
+                exclusive=True,
+                group="ani-cli-check",
+            )
 
     async def on_unmount(self) -> None:
         await asyncio.to_thread(self.database.close)
@@ -304,6 +355,7 @@ class AnixoApp(App[None]):
             WatchlistScreen,
             HistoryScreen,
             SettingsScreen,
+            UpdateScreen,
             RenderTestScreen,
             DiagnosticsScreen,
         )
@@ -340,9 +392,28 @@ class AnixoApp(App[None]):
         if self._editing():
             return
         screen = DiagnosticsScreen()
-        screen.set_status("Environment report loaded.")
-        screen.set_report(self.diagnostics_report())
+        screen.set_status("Loading environment report…")
         self._switch(screen)
+        # Dependency probes include subprocesses and a network check; keep
+        # them off the UI thread so the screen appears immediately.
+        self.run_worker(
+            self._populate_diagnostics(screen),
+            exclusive=True,
+            group="diagnostics",
+        )
+
+    async def _populate_diagnostics(self, screen: DiagnosticsScreen) -> None:
+        try:
+            report = await asyncio.to_thread(self.diagnostics_report)
+        except (OSError, ValueError) as error:
+            if screen in self.screen_stack:
+                screen.set_status(f"Could not build report: {error}")
+            self.notify_user(f"Diagnostics report failed: {error}")
+            return
+        if screen not in self.screen_stack:
+            return
+        screen.set_report(report)
+        screen.set_status(f"Report refreshed {datetime.now():%H:%M:%S}.")
 
     def action_cycle_route(self, delta: int) -> None:
         if self._editing():
@@ -355,6 +426,28 @@ class AnixoApp(App[None]):
         index = routes.index(current)
         target = routes[(index + delta) % len(routes)]
         self._switch(target())
+
+    def action_navigate_back(self) -> None:
+        """Return to the previously visited primary screen."""
+        if self._editing():
+            focused = self.focused
+            if isinstance(focused, Input):
+                focused.blur()
+        if self._route_index <= 0:
+            return
+        self._route_index -= 1
+        self._switch(self._route_history[self._route_index](), remember=False)
+
+    def action_navigate_forward(self) -> None:
+        """Revisit a primary screen after going back."""
+        if self._editing():
+            focused = self.focused
+            if isinstance(focused, Input):
+                focused.blur()
+        if self._route_index + 1 >= len(self._route_history):
+            return
+        self._route_index += 1
+        self._switch(self._route_history[self._route_index](), remember=False)
 
     def action_help(self) -> None:
         self.push_screen(HelpScreen())
@@ -369,6 +462,34 @@ class AnixoApp(App[None]):
         entries: Sequence[Mapping[str, Any]] | None = None,
     ) -> None:
         self.push_screen(EpisodeSelectorScreen(anime, entries=entries))
+
+    async def refresh_airing_progress(self, anime: Anime) -> Anime:
+        """Refresh cached AniList data for a releasing series when needed.
+
+        Existing installs may have metadata cached from before ANIXO tracked
+        ``nextAiringEpisode``. Without it, a season's full planned episode count
+        would look like released episodes. The refresh is skipped when the
+        number is already known, and failures leave the cached data untouched.
+        """
+        if (
+            not anime.anilist_id
+            or anime.next_airing_episode is not None
+            or (anime.status or "").upper() != "RELEASING"
+        ):
+            return anime
+        try:
+            fresh = await self.api.details(int(anime.anilist_id), refresh=True)
+        except Exception:
+            return anime
+        if fresh is None or fresh.next_airing_episode is None:
+            return anime
+        anime.next_airing_episode = fresh.next_airing_episode
+        if fresh.status:
+            anime.status = fresh.status
+        if fresh.episodes:
+            anime.episodes = fresh.episodes
+        await asyncio.to_thread(self.database.upsert_anime, anime)
+        return anime
 
     async def _provider_results(self, anime: Anime) -> list[Any]:
         """Resolve exact provider rows using every title AniList supplied."""
@@ -621,15 +742,42 @@ class AnixoApp(App[None]):
             clear_progress=True,
         )
 
-    def _switch(self, screen: object) -> None:
+    def _remember_route(self, route_type: type) -> None:
+        """Maintain a small browser-style history of primary screens."""
+        if self._route_index >= 0 and self._route_history[self._route_index] is route_type:
+            return
+        if self._route_index < len(self._route_history) - 1:
+            del self._route_history[self._route_index + 1 :]
+        self._route_history.append(route_type)
+        self._route_index = len(self._route_history) - 1
+
+    def _sync_navigation_buttons(self) -> None:
+        """Reflect available back/forward history in every shell top bar."""
+        try:
+            back = self.screen.query_one("#nav-back", Button)
+            forward = self.screen.query_one("#nav-forward", Button)
+        except Exception:
+            return
+        back.disabled = self._route_index <= 0
+        forward.disabled = self._route_index + 1 >= len(self._route_history)
+
+    def _switch(self, screen: object, *, remember: bool = True) -> None:
         # A focused widget from the old screen (usually a nav rail button) can
         # survive the screen swap and swallow Enter/arrow keys on the new one.
         focused = self.focused
         if focused is not None:
             focused.blur()
-        if isinstance(self.screen, self._route_types):
-            self.pop_screen()
+        if remember and isinstance(screen, self._route_types):
+            self._remember_route(type(screen))
+        # A route change from a details/episode screen must discard that whole
+        # stack, otherwise the old screen would stay underneath the new route.
+        for index in range(len(self.screen_stack) - 1, -1, -1):
+            if isinstance(self.screen_stack[index], self._route_types):
+                while len(self.screen_stack) > index:
+                    self.pop_screen()
+                break
         self.push_screen(screen)  # type: ignore[arg-type]
+        self.call_after_refresh(self._sync_navigation_buttons)
         self.call_after_refresh(self._focus_route_content)
 
     def _focus_route_content(self) -> None:
@@ -862,6 +1010,8 @@ class AnixoApp(App[None]):
         self._setup_screen = None
         self.pop_screen()
         await self.push_screen(DashboardScreen())
+        self._remember_route(DashboardScreen)
+        self.call_after_refresh(self._sync_navigation_buttons)
         self.notify_user("ANIXO setup complete.")
 
     async def action_open_setup(self) -> None:
@@ -1056,56 +1206,221 @@ class AnixoApp(App[None]):
     def action_diagnostics_back(self) -> None:
         self.action_goto_settings()
 
-    async def action_check_updates(self) -> None:
-        """Check GitHub Releases, then offer a verified installer download."""
-        self._update_status = "Checking for updates…"
-        self.notify_user(self._update_status)
-        try:
-            check = await self.updates.check(self.config.update_channel)
-        except (OSError, ValueError) as error:
-            self._update_status = f"Update check failed: {error}"
-            self.notify_user(self._update_status)
-            return
-        self.config.last_update_check = datetime.now(timezone.utc).isoformat()
-        self.config_store.save(self.config)
-        if check.error:
-            self._update_status = f"Update check failed: {check.error}"
-            self.notify_user(self._update_status)
-            return
+    # ------------------------------------------------------------------
+    # Updates (ANIXO and ani-cli)
 
-        if not check.update_available or not check.release:
-            self._update_status = (
-                f"ANIXO {check.current} is current on the {check.channel} channel."
-            )
-            self.notify_user(self._update_status)
-            return
-
-        release = check.release
-        notes = " ".join(release.notes.split())[:280] or "No release notes provided."
-        self._update_status = f"Available: ANIXO {check.available} (installed {check.current})"
-        approved = await self.confirm(
-            f"ANIXO {check.available} is available",
-            f"Installed: {check.current}\nAvailable: {check.available}\n"
-            f"Channel: {check.channel}\n\n{notes}\n\n"
-            "Download the verified installer now? Close ANIXO before running it. "
-            "Your data will not be touched.",
+    def _update_screen(self) -> UpdateScreen | None:
+        return next(
+            (item for item in self.screen_stack if isinstance(item, UpdateScreen)),
+            None,
         )
-        if not approved:
+
+    def _set_update_status(
+        self,
+        status: str,
+        *,
+        progress: str = "",
+        error: str = "",
+        busy: bool | None = None,
+    ) -> None:
+        state = self.update_state
+        state.status = status
+        state.error = error
+        if progress:
+            state.progress = progress
+        if busy is not None:
+            state.busy = busy
+        self._update_status = status
+        screen = self._update_screen()
+        if screen:
+            screen.set_state(state)
+
+    def _update_progress(self, value: DownloadProgress) -> None:
+        message = value.message
+        if value.total and value.completed:
+            percent = min(100, int(value.completed * 100 / value.total))
+            message = f"{percent}% — {message}"
+        self._set_update_status(
+            f"{value.stage.replace('_', ' ').title()}…",
+            progress=message,
+            busy=True,
+        )
+
+    def action_open_updates(self) -> None:
+        """Open the dedicated update center without keyboard-only navigation."""
+        if not self._editing():
+            self._switch(UpdateScreen())
+
+    async def _auto_check_updates(self) -> None:
+        check = await self.updates.check(self.config.update_channel)
+        if check.error or check.cached:
             return
-        destination = Path.home() / "Downloads"
-        try:
-            destination.mkdir(parents=True, exist_ok=True)
-            path = await self.updates.download_installer(release, destination)
-        except (OSError, ValueError) as error:
-            self._update_status = f"Update download failed: {error}"
-            self.notify_user(self._update_status)
-            return
-        if self.updates.launch_installer(path):
-            self._update_status = f"Installer ready: {path}"
-            self.notify_user(f"Installer opened. Close ANIXO before installing: {path}")
+        self.config.last_update_check = check.checked_at
+        self.config_store.save(self.config)
+        state = self.update_state
+        state.current = check.current
+        state.available = check.available
+        state.latest = check.available
+        state.channel = check.channel
+        state.release = check.release
+        state.notes = check.release.notes if check.release else ""
+        if check.update_available:
+            state.status = f"UPDATE AVAILABLE — ANIXO {check.available}"
+            self.notify_user(state.status)
         else:
-            self._update_status = f"Verified installer downloaded: {path}"
-            self.notify_user(self._update_status)
+            state.status = check.message or "UP TO DATE"
+
+    async def action_check_updates(self) -> None:
+        """Explicitly check for a compatible release."""
+        self._set_update_status("Checking for updates…", progress="", busy=True)
+        check = await self.updates.check(self.config.update_channel, force=True)
+        self.config.last_update_check = check.checked_at
+        self.config_store.save(self.config)
+        state = self.update_state
+        state.current = check.current
+        state.available = check.available
+        state.latest = check.available
+        state.channel = check.channel
+        state.release = check.release
+        state.notes = check.release.notes if check.release else ""
+        state.error = check.error
+        state.busy = False
+        if check.error:
+            self._set_update_status(f"UPDATE FAILED — {check.error}", error=check.error)
+        elif check.update_available:
+            self._set_update_status(f"UPDATE AVAILABLE — ANIXO {check.available}")
+            self.notify_user(self.update_state.status)
+        else:
+            self._set_update_status(
+                check.message or f"UP TO DATE — ANIXO {check.current}"
+            )
+
+    def action_update_anixo(self) -> None:
+        """Start the download/verify/install flow in a cancellable worker."""
+        self.run_worker(
+            self._update_anixo_flow(),
+            exclusive=True,
+            group="update-flow",
+        )
+
+    async def _update_anixo_flow(self) -> None:
+        state = self.update_state
+        if state.prepared is None:
+            check = await self.updates.check(self.config.update_channel)
+            if not check.update_available or not check.release:
+                self._set_update_status(check.message or "No update is available.")
+                return
+            notes = " ".join(check.release.notes.split())[:280] or "No release notes."
+            approved = await self.confirm(
+                f"Update ANIXO to {check.available}?",
+                f"Installed: {check.current}\nChannel: {check.channel}\n\n{notes}\n\n"
+                "The update is downloaded to staging, checksum-verified, and "
+                "installed by a separate helper after ANIXO closes. "
+                "Your settings, history, watchlist and dependencies are preserved.",
+            )
+            if not approved:
+                self._set_update_status("Update cancelled before download.")
+                return
+            state.release = check.release
+            state.notes = check.release.notes
+            cancel = asyncio.Event()
+            self._update_cancel = cancel
+            state.can_cancel = True
+            self._set_update_status("DOWNLOADING — downloading and verifying…", busy=True)
+            try:
+                prepared = await self.updates.prepare_update(
+                    check.release,
+                    progress=self._update_progress,
+                    should_cancel=cancel.is_set,
+                )
+            except asyncio.CancelledError:
+                self._set_update_status("UPDATE FAILED — download cancelled.", busy=False)
+                state.can_cancel = False
+                return
+            except (OSError, ValueError) as error:
+                self._set_update_status(
+                    f"UPDATE FAILED — {error}", error=str(error), busy=False
+                )
+                state.can_cancel = False
+                return
+            state.prepared = prepared
+            state.verification = prepared.verification
+            state.can_cancel = False
+            self._set_update_status(
+                f"READY TO INSTALL — ANIXO {prepared.version} passed verification.",
+                progress="Restart is required to complete installation.",
+                busy=False,
+            )
+        restart = await self.confirm(
+            "Restart and install now?",
+            "ANIXO will close and a separate updater helper will install the "
+            "verified package, check it, then reopen ANIXO. The previous "
+            "installation is restored automatically if anything fails.",
+        )
+        if restart:
+            self.action_restart_update()
+
+    def action_cancel_update(self) -> None:
+        if self._update_cancel is not None:
+            self._update_cancel.set()
+        self._set_update_status("Cancelling update…", busy=False)
+        self.update_state.can_cancel = False
+
+    def action_restart_update(self) -> None:
+        prepared = self.update_state.prepared
+        if prepared is None:
+            self.notify_user("There is no verified update waiting to be installed.")
+            return
+        if not self.updates.launch_helper(prepared.plan_path):
+            self._set_update_status(
+                "UPDATE FAILED — updater helper could not be started.",
+                error="ANIXO-Updater was not found.",
+            )
+            return
+        self.update_state.restart_required = False
+        self._set_update_status("INSTALLING — ANIXO will restart…", busy=True)
+        self.exit()
+
+    def action_view_release_notes(self) -> None:
+        notes = self.update_state.notes or "No release notes are available yet."
+        self.notify_user(notes[:300])
+
+    async def _notify_applied_update(self) -> None:
+        marker = self.data_dir / "updates" / "last-result.json"
+        try:
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not payload.get("ok") or str(payload.get("version")) != VERSION:
+            return
+        self.notify_user(payload.get("message") or f"ANIXO {VERSION} is ready.")
+        try:
+            marker.unlink()
+        except OSError:
+            pass
+
+    async def _auto_check_ani_cli_updates(self) -> None:
+        check = await self.ani_cli_updates.check_async()
+        self.ani_cli_check = check
+        if check.error or check.cached:
+            return
+        self.config.last_ani_cli_check = check.last_checked
+        self.config_store.save(self.config)
+        if check.update_available:
+            self.notify_user(check.message)
+
+    async def action_check_ani_cli_updates(self) -> None:
+        check = await self.ani_cli_updates.check_async(force=True)
+        self.ani_cli_check = check
+        self.ani_cli_status = self.ani_cli_updates.detect_installed()
+        if not check.error:
+            self.config.last_ani_cli_check = check.last_checked
+            self.config_store.save(self.config)
+        self.notify_user(check.message or check.error or "ani-cli check complete.")
+
+    async def action_update_ani_cli(self) -> Any:
+        """Run the staged ani-cli update off the UI thread."""
+        return await asyncio.to_thread(self.ani_cli_updates.update, self.ani_cli_check)
 
     async def _missing_playback_components(self) -> list[str]:
         statuses = await asyncio.to_thread(dependency_statuses, self.config, self.ani_cli)

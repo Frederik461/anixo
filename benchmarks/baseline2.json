@@ -1,0 +1,73 @@
+{
+  "label": "baseline2",
+  "python": "3.12.10",
+  "import": {
+    "median_ms": 671.25,
+    "runs_ms": [
+      923.9199000003282,
+      671.252099999947,
+      637.5474999995276
+    ]
+  },
+  "startup": {
+    "median_ms": 382.81,
+    "runs_ms": [
+      393.46,
+      374.24,
+      382.81
+    ],
+    "median_widgets": 0
+  },
+  "navigation": {
+    "median_ms": 731.35,
+    "runs_ms": [
+      731.35,
+      692.91,
+      876.49
+    ]
+  },
+  "search": {
+    "typing_to_settled_ms": 930.0,
+    "runs_ms": [
+      930.0,
+      868.52,
+      1050.21
+    ],
+    "api_calls_for_9_characters": 1,
+    "api_calls": [
+      "benchmark"
+    ]
+  },
+  "episodes": {
+    "median_ms": 430.03,
+    "runs_ms": [
+      513.22,
+      430.03,
+      239.09
+    ]
+  },
+  "duplicate_api_calls": {
+    "median_ms": 1982.08,
+    "posts_per_burst": [
+      6,
+      6,
+      6
+    ]
+  },
+  "image_cache_hit": {
+    "median_ms_per_200_lookups": 27.2,
+    "runs_ms": [
+      31.78,
+      25.84,
+      27.2
+    ]
+  },
+  "history_lookup": {
+    "median_ms_per_20_lookups": 175.43,
+    "runs_ms": [
+      175.43,
+      174.26,
+      177.04
+    ]
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "label": "release2",
+  "python": "3.12.10",
+  "import": {
+    "median_ms": 419.52,
+    "runs_ms": [
+      441.6248000006817,
+      415.7130000003235,
+      419.5190000000366
+    ]
+  },
+  "cold_startup_estimate_ms": 825.55,
+  "warm_startup": {
+    "median_ms": 406.03,
+    "runs_ms": [
+      315.71,
+      406.03,
+      433.95
+    ],
+    "median_widgets": 0
+  },
+  "details": {
+    "median_ms": 939.45,
+    "runs_ms": [
+      939.45,
+      972.88,
+      878.26
+    ]
+  },
+  "navigation": {
+    "median_ms": 939.45,
+    "runs_ms": [
+      939.45,
+      972.88,
+      878.26
+    ]
+  },
+  "search": {
+    "typing_to_settled_ms": 870.69,
+    "runs_ms": [
+      866.91,
+      1123.83,
+      870.69
+    ],
+    "api_calls_for_9_characters": 1,
+    "api_calls": [
+      "benchmark"
+    ]
+  },
+  "episodes": {
+    "median_ms": 579.98,
+    "runs_ms": [
+      532.29,
+      598.31,
+      579.98
+    ]
+  },
+  "duplicate_api_calls": {
+    "median_ms": 30.83,
+    "posts_per_burst": [
+      1,
+      1,
+      1
+    ]
+  },
+  "image_cache_hit": {
+    "median_ms_per_200_lookups": 20.65,
+    "runs_ms": [
+      23.46,
+      20.65,
+      18.33
+    ]
+  },
+  "history_lookup": {
+    "median_ms_per_20_lookups": 2.83,
+    "runs_ms": [
+      2.97,
+      2.83,
+      2.52
+    ]
+  },
+  "resource_usage": {
+    "peak_traced_mib": 0.55,
+    "cpu_ms_for_hot_path_workload": 328.12,
+    "note": "Fixed workload: 6 duplicate API bursts, 600 cached-poster lookups, 60 history lookups. Python heap only, not RSS."
+  }
+}

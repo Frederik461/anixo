@@ -1,0 +1,49 @@
+{
+  "label": "baseline",
+  "python": "3.12.10",
+  "import": {
+    "median_ms": 714.44,
+    "runs_ms": [
+      714.4438999998783,
+      711.3814000003913,
+      751.1635999999271
+    ]
+  },
+  "startup": {
+    "median_ms": 445.27,
+    "runs_ms": [
+      445.27,
+      410.4,
+      485.24
+    ],
+    "median_widgets": 0
+  },
+  "navigation": {
+    "median_ms": 762.19,
+    "runs_ms": [
+      762.19,
+      723.37,
+      954.56
+    ]
+  },
+  "search": {
+    "typing_to_settled_ms": 950.44,
+    "runs_ms": [
+      950.44,
+      1138.64,
+      842.41
+    ],
+    "api_calls_for_9_characters": 1,
+    "api_calls": [
+      "benchmark"
+    ]
+  },
+  "episodes": {
+    "median_ms": 520.39,
+    "runs_ms": [
+      520.39,
+      580.24,
+      345.52
+    ]
+  }
+}

@@ -16,6 +16,7 @@ import shutil
 import stat
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -158,7 +159,27 @@ def dependency_statuses(config: Config, ani_cli: Any) -> list[DependencyStatus]:
         else "Not detected. Install the pinned, checksum-verified v5.1 script."
     )
 
-    mpv_installed, mpv_version = _program_version("mpv", configured=config.mpv_path)
+    # Each probe may run a subprocess with a multi-second timeout. They are
+    # independent, so run them together instead of adding up their latencies.
+    shell = _find_git_bash(config)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        mpv_future = pool.submit(_program_version, "mpv", configured=config.mpv_path)
+        shell_future = (
+            pool.submit(_program_version, "bash", configured=str(shell))
+            if shell
+            else None
+        )
+        ffmpeg_future = pool.submit(_program_version, "ffmpeg")
+        fzf_future = pool.submit(_program_version, "fzf")
+        mpv_installed, mpv_version = mpv_future.result()
+        shell_installed, shell_version = (
+            shell_future.result()
+            if shell_future is not None
+            else (False, "not found")
+        )
+        ffmpeg_installed, ffmpeg_version = ffmpeg_future.result()
+        fzf_installed, fzf_version = fzf_future.result()
+
     if adapter.is_windows:
         mpv_detail = (
             f"Detected: {mpv_version}" if mpv_installed
@@ -170,16 +191,6 @@ def dependency_statuses(config: Config, ani_cli: Any) -> list[DependencyStatus]:
             else f"Not detected. Install mpv from {MPV_OFFICIAL_URL}."
         )
 
-    shell = _find_git_bash(config)
-    if shell:
-        shell_installed, shell_version = _program_version(
-            "bash", configured=str(shell)
-        )
-    else:
-        shell_installed, shell_version = False, "not found"
-
-    ffmpeg_installed, ffmpeg_version = _program_version("ffmpeg")
-    fzf_installed, fzf_version = _program_version("fzf")
     winget_available = adapter.is_windows
 
     return [
@@ -295,6 +306,12 @@ def build_snapshot(
     if renderer_note:
         terminal_summary = f"{terminal_summary} — {renderer_note}".strip(" —")
 
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        network_future = pool.submit(check_network)
+        dependencies_future = pool.submit(dependency_statuses, config, ani_cli)
+        network_ok = network_future.result()
+        dependencies = tuple(dependencies_future.result())
+
     return SetupSnapshot(
         os_name=platform.system(),
         os_version=platform.version(),
@@ -302,8 +319,8 @@ def build_snapshot(
         app_version=app_version,
         terminal_summary=terminal_summary,
         renderer=renderer,
-        network_ok=check_network(),
-        dependencies=tuple(dependency_statuses(config, ani_cli)),
+        network_ok=network_ok,
+        dependencies=dependencies,
         legacy_data_path=str(legacy_path) if legacy_path else None,
         legacy_data_counts=dict(legacy_counts or {}),
     )
@@ -473,6 +490,66 @@ def install_ani_cli(destination: Path, *, overwrite: bool = False) -> InstallRes
             f"Expected: {ANI_CLI_SHA256}\nReceived: {digest}",
         )
 
+    return install_verified_ani_cli_payload(
+        target_dir,
+        payload,
+        expected_sha256=ANI_CLI_SHA256,
+        overwrite=overwrite,
+        version="v5.1",
+        source=ANI_CLI_URL,
+    )
+
+
+def _looks_like_ani_cli(payload: bytes) -> bool:
+    """Cheap structural validation before an already-verified script is written."""
+    if len(payload) < 4000:
+        return False
+    head = payload[:512].lstrip()
+    return head.startswith(b"#!/") and (
+        b"hianime_search" in payload or b"base_api=" in payload
+    )
+
+
+def install_verified_ani_cli_payload(
+    destination: Path,
+    payload: bytes,
+    *,
+    expected_sha256: str,
+    overwrite: bool = False,
+    version: str = "",
+    source: str = "",
+    write_wrapper: bool = True,
+) -> InstallResult:
+    """Install a downloaded ani-cli script after an explicit checksum proof.
+
+    This function never downloads or executes anything.  It also preserves an
+    existing Windows CMD wrapper's custom lines, changing only the ANI_CLI path
+    when needed.
+    """
+    target_dir = Path(destination).expanduser()
+    script = target_dir / "ani-cli"
+    wrapper = target_dir / "ani-cli.cmd"
+    if (script.exists() or wrapper.exists()) and not overwrite:
+        return InstallResult(
+            False,
+            "An ani-cli script already exists at this location.",
+            "ANIXO did not overwrite it. Only ANIXO-managed installations may be replaced.",
+            install_location=str(script.resolve()),
+        )
+    actual = hashlib.sha256(payload).hexdigest().upper()
+    if actual != str(expected_sha256).upper():
+        return InstallResult(
+            False,
+            "ani-cli download failed SHA256 verification; nothing was installed.",
+            f"Expected: {expected_sha256}\nReceived: {actual}",
+        )
+    if not _looks_like_ani_cli(payload):
+        return InstallResult(
+            False,
+            "The ani-cli candidate does not look like the official script.",
+            "The download was rejected before the existing installation was touched.",
+        )
+
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
         _atomic_write_bytes(script, payload)
@@ -486,19 +563,32 @@ def install_ani_cli(destination: Path, *, overwrite: bool = False) -> InstallRes
 
     details = [
         f"Installed: {script.resolve()}",
-        f"Verified SHA256: {digest}",
-        f"Source: {ANI_CLI_URL}",
+        f"Verified SHA256: {actual}",
+        f"Source: {source or ANI_CLI_URL}",
         f"License: GPL-3.0 ({GPL3_URL})",
     ]
-    if os.name == "nt":
+    if os.name == "nt" and write_wrapper:
         bash = _find_git_bash()
-        if bash:
+        if wrapper.exists():
+            try:
+                original = wrapper.read_text(encoding="utf-8", errors="replace")
+                updated = re.sub(
+                    r'(?im)^(set\s+"ANI_CLI=)[^"]*(".*)$',
+                    lambda match: f'{match.group(1)}{script.resolve()}{match.group(2)}',
+                    original,
+                )
+                if not re.search(r'(?im)^set\s+"ANI_CLI=', updated):
+                    updated = original
+                _atomic_write_bytes(wrapper, updated.encode("utf-8"))
+                details.append(f"Preserved CMD wrapper: {wrapper.resolve()}")
+            except OSError as error:
+                details.append(f"Script installed, but wrapper preservation failed: {error}")
+        elif bash:
             try:
                 _atomic_write_bytes(wrapper, _cmd_wrapper(script, bash))
+                details.append(f"CMD wrapper: {wrapper.resolve()}")
             except OSError as error:
                 details.append(f"Script installed, but CMD wrapper failed: {error}")
-            else:
-                details.append(f"CMD wrapper: {wrapper.resolve()}")
         else:
             details.append(
                 "Git Bash was not found. Install it (winget install --id Git.Git) "
@@ -507,10 +597,10 @@ def install_ani_cli(destination: Path, *, overwrite: bool = False) -> InstallRes
 
     return InstallResult(
         True,
-        "ani-cli v5.1 installed and checksum-verified.",
+        f"ani-cli {version or 'verified script'} installed and checksum-verified.",
         "\n".join(details),
-        source=ANI_CLI_URL,
-        version="v5.1",
+        source=source or ANI_CLI_URL,
+        version=version,
         install_location=str(script.resolve()),
-        sha256=digest,
+        sha256=actual,
     )

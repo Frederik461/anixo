@@ -8,6 +8,7 @@ from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.events import Click
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Static
 
@@ -142,6 +143,20 @@ class UninstallScreen(ModalScreen[dict[str, Any] | None]):
     def action_select_complete(self) -> None:
         self.mode = "complete"
         self._refresh()
+
+    @on(Click, "#uninstall-option-app")
+    def on_app_option_clicked(self, event: Click) -> None:
+        if event.button != 1:
+            return
+        event.stop()
+        self.action_select_app_only()
+
+    @on(Click, "#uninstall-option-complete")
+    def on_complete_option_clicked(self, event: Click) -> None:
+        if event.button != 1:
+            return
+        event.stop()
+        self.action_select_complete()
 
     @on(Checkbox.Changed)
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:

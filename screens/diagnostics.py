@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from rich.text import Text
+from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, VerticalScroll
-from textual.widgets import Static
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.widgets import Button, Static
 
 from components.shell import ShellScreen
 from components.ui import SectionHeading
@@ -31,7 +32,17 @@ class DiagnosticsScreen(ShellScreen):
         def content() -> ComposeResult:
             with Vertical(id="diagnostics-panel"):
                 yield Static(self._status, id="diagnostics-status", classes="meta-text")
-                yield SectionHeading("Environment report", "R refresh • E export")
+                with Horizontal(id="diagnostics-actions"):
+                    yield Button(
+                        "↻  Refresh",
+                        id="diagnostics-refresh",
+                        classes="action-button",
+                    )
+                    yield Button(
+                        "↧  Export report",
+                        id="diagnostics-export",
+                        classes="action-button",
+                    )
                 with VerticalScroll(id="diagnostics-scroll"):
                     yield Static(
                         Text(self._report),
@@ -59,7 +70,17 @@ class DiagnosticsScreen(ShellScreen):
             self.query_one("#diagnostics-status", Static).update(self._status)
 
     # ------------------------------------------------------------------
-    # Bindings -> app actions
+    # Bindings and buttons -> app actions
+
+    @on(Button.Pressed, "#diagnostics-refresh")
+    async def on_refresh_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        await self.action_refresh()
+
+    @on(Button.Pressed, "#diagnostics-export")
+    async def on_export_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        await self.action_export()
 
     async def action_refresh(self) -> None:
         await self.app.action_diagnostics_refresh()

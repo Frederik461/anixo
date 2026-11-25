@@ -12,6 +12,7 @@ from textual.containers import Grid, Horizontal, VerticalScroll
 from textual.events import Click
 from textual.reactive import reactive
 from textual.widgets import Input, Static
+from textual.worker import Worker
 
 from components.anime_card import AnimeCard
 from components.navigation import Selection
@@ -82,7 +83,7 @@ class DiscoverScreen(ShellScreen):
         self._search_timer = None
         self._search_generation = 0
         self._render_generation = 0
-        self._search_lock = asyncio.Lock()
+        self._search_worker: Worker | None = None
         self._render_lock = asyncio.Lock()
         self._last_tier = ""
 
@@ -128,7 +129,9 @@ class DiscoverScreen(ShellScreen):
         tier = self._tier()
         if self.is_mounted and tier != self._last_tier:
             self._last_tier = tier
-            asyncio.create_task(self._render_page())
+            self.run_worker(
+                self._render_page(), exclusive=True, group="discover-render"
+            )
 
     def _tier(self) -> str:
         if self.has_class("compact"):
@@ -183,13 +186,23 @@ class DiscoverScreen(ShellScreen):
             return self.query_text
 
     async def run_search(self, query: str) -> None:
-        """Run the newest search only; older requests are discarded."""
+        """Cancel outdated searches so only the newest query can render."""
         generation = self._search_generation + 1
         self._search_generation = generation
-        async with self._search_lock:
-            if generation != self._search_generation:
-                return
-            await self._perform_search(query, generation)
+        previous = self._search_worker
+        if previous is not None and not previous.is_finished:
+            previous.cancel()
+        self._search_worker = self.run_worker(
+            self._perform_search(query, generation),
+            exclusive=True,
+            group="discover-search",
+        )
+        try:
+            await self._search_worker.wait()
+        except Exception:
+            # Cancellation of an outdated search is expected and needs no UI
+            # update; failures are already handled inside _perform_search.
+            pass
 
     async def _perform_search(self, query: str, generation: int) -> None:
         self.query_text = query
@@ -201,18 +214,19 @@ class DiscoverScreen(ShellScreen):
         await body.mount(LoadingState("Loading anime…"))
         try:
             if is_search:
-                self.results = await self.app.api.search(query, per_page=48)
+                results = await self.app.api.search(query, per_page=48)
             else:
-                self.results = await self.app.api.browse(
+                results = await self.app.api.browse(
                     category=self.current_category,
                     genre=self.current_genre,
                     sort=self.current_sort,
                     per_page=48,
                 )
         except Exception:
-            self.results = []
+            results = []
         if generation != self._search_generation:
             return
+        self.results = results
         self.selection.clamp(len(self.visible_results))
         await self._render_page()
 
@@ -255,12 +269,13 @@ class DiscoverScreen(ShellScreen):
 
         start = self.selection.page_start
         page = items[start : self.selection.page_end]
+        watchlisted = await asyncio.to_thread(self.app.database.watchlisted_ids)
         children: list[_ResultCard] = []
         for offset, anime in enumerate(page):
             if self.view_mode == "list":
                 card = AnimeCard(
                     anime,
-                    watchlisted=self.app.database.is_watchlisted(anime.id),
+                    watchlisted=anime.id in watchlisted,
                     poster_width=10,
                     poster_height=8,
                     renderer=self.app.config.artwork_renderer,
@@ -273,7 +288,7 @@ class DiscoverScreen(ShellScreen):
                     anime,
                     artwork=self.app.artwork,
                     renderer=self.app.config.artwork_renderer,
-                    watchlisted=self.app.database.is_watchlisted(anime.id),
+                    watchlisted=anime.id in watchlisted,
                     poster_width=9 if self.has_class("compact") else 13,
                     poster_height=7 if self.has_class("compact") else 10,
                 )
@@ -306,7 +321,9 @@ class DiscoverScreen(ShellScreen):
         old_page = self.selection.page_start
         self.selection.move(delta, len(self.visible_results))
         if self.selection.page_start != old_page:
-            asyncio.create_task(self._reselect_after_page())
+            self.run_worker(
+                self._reselect_after_page(), exclusive=True, group="discover-render"
+            )
         else:
             self.update_selection()
 
@@ -314,7 +331,9 @@ class DiscoverScreen(ShellScreen):
         old_page = self.selection.page_start
         self.selection.page_move(delta, len(self.visible_results))
         if self.selection.page_start != old_page:
-            asyncio.create_task(self._reselect_after_page())
+            self.run_worker(
+                self._reselect_after_page(), exclusive=True, group="discover-render"
+            )
         else:
             self.update_selection()
 
@@ -333,7 +352,12 @@ class DiscoverScreen(ShellScreen):
         if self._search_timer:
             self._search_timer.stop()
         self._search_timer = self.set_timer(
-            0.35, lambda: asyncio.create_task(self._run_deferred_search(query))
+            0.35,
+            lambda: self.run_worker(
+                self._run_deferred_search(query),
+                exclusive=True,
+                group="discover-search-deferred",
+            ),
         )
 
     async def _run_deferred_search(self, query: str) -> None:
@@ -363,6 +387,24 @@ class DiscoverScreen(ShellScreen):
     async def _on_sort_click(self, event: Click) -> None:
         event.stop()
         await self.action_sort()
+
+    @on(PosterTile.Chosen)
+    def on_tile_chosen(self, event: PosterTile.Chosen) -> None:
+        self._open_chosen_card(event, event.anime)
+
+    @on(AnimeCard.Chosen)
+    def on_card_chosen(self, event: AnimeCard.Chosen) -> None:
+        self._open_chosen_card(event, event.anime)
+
+    def _open_chosen_card(self, event: PosterTile.Chosen | AnimeCard.Chosen, anime: Anime) -> None:
+        event.stop()
+        cards = self.cards
+        if event.source in cards:
+            offset = self.selection.page_start + cards.index(event.source)
+            if 0 <= offset < len(self.visible_results):
+                self.selection.index = offset
+                self.update_selection()
+        self.app.open_details(anime.id)
 
     async def action_open(self) -> None:
         items = self.visible_results

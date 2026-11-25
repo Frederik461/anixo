@@ -5,7 +5,9 @@ from __future__ import annotations
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.events import Click
+from textual.message import Message
 from textual.widgets import Button, Static
 
 from components.shell import ShellScreen
@@ -29,6 +31,33 @@ _STEP_BODIES = (
     "ANIXO adapts artwork to the image protocol your terminal supports.",
     "ANIXO is ready!",
 )
+
+
+class DependencyRow(Static):
+    """Clickable dependency choice in the setup wizard."""
+
+    class Chosen(Message):
+        def __init__(self, key: str) -> None:
+            self.key = key
+            super().__init__()
+
+    def __init__(self, status: DependencyStatus) -> None:
+        state = "ready" if status.installed else (
+            "required" if status.required else "optional"
+        )
+        marker = "✓" if status.installed else ("❯" if status.installable else "·")
+        text = (
+            f"{marker}  {status.label:<10} {state:<8} {status.version}\n"
+            f"    {plain_text(status.description)}"
+        )
+        super().__init__(text, classes="setup-dependency-row")
+        self.dependency_key = status.key
+
+    def on_click(self, event: Click) -> None:
+        if event.button != 1:
+            return
+        event.stop()
+        self.post_message(self.Chosen(self.dependency_key))
 
 
 class SetupScreen(ShellScreen):
@@ -61,7 +90,9 @@ class SetupScreen(ShellScreen):
                 yield SectionHeading("First-launch setup", "6 steps")
                 yield Static("", id="setup-title", classes="section-title")
                 yield Static("", id="setup-body", classes="meta-text")
-                yield Static("", id="setup-items", classes="setup-items")
+                with Vertical(id="setup-items-pane"):
+                    yield Static("", id="setup-items", classes="setup-items")
+                    yield VerticalScroll(id="setup-dependency-list")
                 with Horizontal(id="setup-actions"):
                     yield Button("← Back", id="setup-back", classes="action-button ghost")
                     yield Button(
@@ -100,10 +131,26 @@ class SetupScreen(ShellScreen):
             return
 
         index = self.current_step
+        snapshot = self.snapshot
         self.query_one("#setup-step", Static).update(f"STEP {index + 1} / {_STEP_COUNT}")
         self.query_one("#setup-title", Static).update(plain_text(_STEP_TITLES[index]))
         self.query_one("#setup-body", Static).update(plain_text(_STEP_BODIES[index]))
-        self.query_one("#setup-items", Static).update(self._items_text(index))
+        items = self.query_one("#setup-items", Static)
+        dependency_list = self.query_one("#setup-dependency-list", VerticalScroll)
+        if index in (2, 3):
+            items.display = False
+            dependency_list.display = True
+            dependency_list.remove_children()
+            for status in snapshot.dependencies:
+                row = DependencyRow(status)
+                row.set_class(status.key == self.selected_dependency, "selected")
+                if not status.installable:
+                    row.add_class("unavailable")
+                dependency_list.mount(row)
+        else:
+            items.display = True
+            dependency_list.display = False
+            items.update(self._items_text(index))
 
         status = self._selected_status()
         installable = bool(status and status.installable and not status.installed)
@@ -205,7 +252,13 @@ class SetupScreen(ShellScreen):
         return "\n".join(plain_text(line) for line in lines)
 
     # ------------------------------------------------------------------
-    # Buttons -> app actions
+    # Pointer and button actions
+
+    @on(DependencyRow.Chosen)
+    def on_dependency_chosen(self, event: DependencyRow.Chosen) -> None:
+        event.stop()
+        self.selected_dependency = event.key
+        self.render_step()
 
     @on(Button.Pressed, "#setup-back")
     def _on_back_pressed(self, event: Button.Pressed) -> None:

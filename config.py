@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from platforms import get_platform_adapter
+from version import DEFAULT_UPDATE_CHANNEL
 
 
 
@@ -66,9 +67,15 @@ _DEFAULT_EXTRA: dict[str, Any] = {
     "setup_completed": False,
     "setup_version": "",
     "migration_completed": False,
-    "update_channel": "stable",
-    "update_repo": "fred8/anixo",
+    "update_channel": DEFAULT_UPDATE_CHANNEL,
+    # The source repository is private.  Testers need a public manifest feed
+    # URL; no token is ever stored in config.
+    "update_repo": "Frederik461/anixo",
+    "update_feed_url": "",
+    "update_public_key": "",
+    "check_for_app_updates": True,
     "last_update_check": "",
+    "last_ani_cli_check": "",
     "franchise_selections": {},
 }
 
@@ -111,7 +118,11 @@ _FIELD_ALIASES: dict[str, str] = {
     "migrationCompleted": "migration_completed",
     "updateChannel": "update_channel",
     "updateRepo": "update_repo",
+    "updateFeedUrl": "update_feed_url",
+    "updatePublicKey": "update_public_key",
+    "checkForAppUpdates": "check_for_app_updates",
     "lastUpdateCheck": "last_update_check",
+    "lastAniCliCheck": "last_ani_cli_check",
 }
 
 
@@ -390,11 +401,48 @@ class Config:
     @property
     def update_repo(self) -> str:
         value = str(self.extra.get("update_repo") or "").strip()
-        return value or os.environ.get("ANIXO_UPDATE_REPO") or "fred8/anixo"
+        return (
+            value
+            or os.environ.get("ANIXO_UPDATE_REPO", "").strip()
+            or "Frederik461/anixo"
+        )
 
     @update_repo.setter
     def update_repo(self, value: str) -> None:
         self.extra["update_repo"] = str(value).strip()
+
+    @property
+    def update_feed_url(self) -> str:
+        return str(
+            self.extra.get("update_feed_url")
+            or os.environ.get("ANIXO_UPDATE_FEED_URL", "")
+            or ""
+        ).strip()
+
+    @update_feed_url.setter
+    def update_feed_url(self, value: str) -> None:
+        self.extra["update_feed_url"] = str(value).strip()
+
+    @property
+    def update_public_key(self) -> str:
+        return str(
+            self.extra.get("update_public_key")
+            or os.environ.get("ANIXO_UPDATE_PUBLIC_KEY", "")
+            or ""
+        ).strip()
+
+    @update_public_key.setter
+    def update_public_key(self, value: str) -> None:
+        self.extra["update_public_key"] = str(value).strip()
+
+    @property
+    def check_for_app_updates(self) -> bool:
+        value = self.extra.get("check_for_app_updates", True)
+        return value if isinstance(value, bool) else str(value).lower() != "false"
+
+    @check_for_app_updates.setter
+    def check_for_app_updates(self, value: bool) -> None:
+        self.extra["check_for_app_updates"] = bool(value)
 
     @property
     def last_update_check(self) -> str:
@@ -403,6 +451,14 @@ class Config:
     @last_update_check.setter
     def last_update_check(self, value: str) -> None:
         self.extra["last_update_check"] = str(value)
+
+    @property
+    def last_ani_cli_check(self) -> str:
+        return str(self.extra.get("last_ani_cli_check") or "")
+
+    @last_ani_cli_check.setter
+    def last_ani_cli_check(self, value: str) -> None:
+        self.extra["last_ani_cli_check"] = str(value)
 
     # ------------------------------------------------------------------
 
@@ -453,6 +509,11 @@ class Config:
         self.migration_completed = self.migration_completed
         self.update_channel = self.update_channel
         self.update_repo = self.update_repo
+        self.update_feed_url = self.update_feed_url
+        self.update_public_key = self.update_public_key
+        self.check_for_app_updates = self.check_for_app_updates
+        self.last_update_check = self.last_update_check
+        self.last_ani_cli_check = self.last_ani_cli_check
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "Config":

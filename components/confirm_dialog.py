@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container
+from textual.containers import Container, Horizontal
 from textual.screen import ModalScreen
-from textual.widgets import Static
+from textual.widgets import Button, Static
 
 
 class ConfirmDialog(ModalScreen[bool]):
@@ -28,6 +29,19 @@ class ConfirmDialog(ModalScreen[bool]):
             if self.message_text:
                 yield Static(self.message_text, classes="confirm-message")
             yield Static("Y  confirm    N / Esc  cancel", classes="confirm-hint")
+            with Horizontal(classes="confirm-actions"):
+                yield Button("✓  Confirm", id="confirm-yes", classes="action-button primary")
+                yield Button("✕  Cancel", id="confirm-no", classes="action-button ghost")
+
+    @on(Button.Pressed, "#confirm-yes")
+    def on_confirm(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.action_confirm()
+
+    @on(Button.Pressed, "#confirm-no")
+    def on_cancel(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.action_cancel()
 
     def action_confirm(self) -> None:
         self.dismiss(True)

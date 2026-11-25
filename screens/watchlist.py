@@ -61,7 +61,9 @@ class WatchlistScreen(ShellScreen):
         tier = self._tier()
         if self.is_mounted and tier != self._last_tier:
             self._last_tier = tier
-            asyncio.create_task(self.render_cards())
+            self.run_worker(
+                self.render_cards(), exclusive=True, group="watchlist-render"
+            )
 
     def _tier(self) -> str:
         if self.has_class("compact"):
@@ -142,6 +144,15 @@ class WatchlistScreen(ShellScreen):
             return list(self.query_one("#watchlist-grid", Grid).query(PosterTile))
         except Exception:
             return []
+
+    @on(PosterTile.Chosen)
+    def on_tile_chosen(self, event: PosterTile.Chosen) -> None:
+        event.stop()
+        tiles = self.cards
+        if event.source in tiles:
+            self.selection_index = tiles.index(event.source)
+            self.update_selection()
+        self.app.open_details(event.anime.id)
 
     def action_focus_filter(self) -> None:
         self.query_one(SearchField).focus_field()

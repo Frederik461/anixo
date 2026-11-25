@@ -246,40 +246,46 @@ class Database:
             """,
             (limit,),
         ).fetchall()
-        entries: list[HistoryEntry] = []
-        for row in rows:
-            payload = row["anime_payload"]
-            anime = (
-                Anime.from_mapping(_loads(payload))
-                if payload
-                else Anime(
-                    id=row["anime_id"],
-                    title=AnimeTitle(romaji=row["title_snapshot"] or "Unknown anime"),
-                    source_id=row["ani_cli_source_id"],
-                )
+        return [self._history_entry_from_row(row) for row in rows]
+
+    @staticmethod
+    def _history_entry_from_row(row: Any) -> HistoryEntry:
+        payload = row["anime_payload"]
+        anime = (
+            Anime.from_mapping(_loads(payload))
+            if payload
+            else Anime(
+                id=row["anime_id"],
+                title=AnimeTitle(romaji=row["title_snapshot"] or "Unknown anime"),
+                source_id=row["ani_cli_source_id"],
             )
-            entries.append(
-                HistoryEntry(
-                    id=row["id"],
-                    anime=anime,
-                    episode=row["episode"],
-                    last_watched=parse_iso(row["last_watched"]),
-                    watched_at=parse_iso(row["last_watched"]),
-                    updated_at=parse_iso(row["updated_at"]),
-                    source=row["source"],
-                    source_id=row["ani_cli_source_id"],
-                    progress_seconds=row["progress_seconds"],
-                    duration_seconds=row["duration_seconds"],
-                    title_snapshot=row["title_snapshot"],
-                )
-            )
-        return entries
+        )
+        return HistoryEntry(
+            id=row["id"],
+            anime=anime,
+            episode=row["episode"],
+            last_watched=parse_iso(row["last_watched"]),
+            watched_at=parse_iso(row["last_watched"]),
+            updated_at=parse_iso(row["updated_at"]),
+            source=row["source"],
+            source_id=row["ani_cli_source_id"],
+            progress_seconds=row["progress_seconds"],
+            duration_seconds=row["duration_seconds"],
+            title_snapshot=row["title_snapshot"],
+        )
 
     def get_history_entry(self, entry_id: str) -> HistoryEntry | None:
-        for entry in self.list_history(limit=1000):
-            if entry.id == entry_id:
-                return entry
-        return None
+        row = self.connection.execute(
+            """
+            SELECT h.*, a.payload AS anime_payload
+            FROM history h
+            LEFT JOIN anime a ON a.id = h.anime_id
+            WHERE h.id = ?
+            LIMIT 1
+            """,
+            (entry_id,),
+        ).fetchone()
+        return self._history_entry_from_row(row) if row else None
 
     def find_history_for_anime(self, anime: Anime) -> HistoryEntry | None:
         """Find the history row that belongs to an anime.
@@ -288,6 +294,19 @@ class Database:
         are used as conservative fallbacks.
         """
         normalized = normalize_title(anime.display_title())
+        fast_row = self.connection.execute(
+            """
+            SELECT h.*, a.payload AS anime_payload
+            FROM history h
+            LEFT JOIN anime a ON a.id = h.anime_id
+            WHERE h.anime_id = ? OR (? != '' AND h.ani_cli_source_id = ?)
+            ORDER BY COALESCE(h.updated_at, h.last_watched) DESC
+            LIMIT 1
+            """,
+            (anime.id, anime.source_id or "", anime.source_id or ""),
+        ).fetchone()
+        if fast_row is not None:
+            return self._history_entry_from_row(fast_row)
         for entry in self.list_history(limit=1000):
             if entry.anime.id == anime.id:
                 return entry
@@ -658,6 +677,13 @@ class Database:
             ).fetchone()
             is not None
         )
+
+    def watchlisted_ids(self) -> set[str]:
+        """Return all watchlisted anime IDs in one query."""
+        return {
+            row[0]
+            for row in self.connection.execute("SELECT anime_id FROM watchlist").fetchall()
+        }
 
     def list_watchlist(self) -> list[WatchlistEntry]:
         rows = self.connection.execute(
