@@ -20,7 +20,7 @@ been tested. Intel Mac builds are not published until independently tested.
 | Check | Result |
 | --- | --- |
 | `uv lock --check` | PASS — frozen lock resolves. |
-| `python -m pytest -q` | PASS — **280 passed** on real Windows on 2026-11-25 after the release-manager work (251 after the update work); **280 passed** on both GitHub-hosted macOS runners during the successful tagged release workflow. Earlier macOS checks were `202 passed, 1 skipped` (Windows-only cmd-wrapper test). |
+| `python -m pytest -q` | PASS — **280 passed** on real Windows on 2026-11-25 after the episode-loading fix; **280 passed** on both GitHub-hosted macOS runners during the successful `v0.1.0-beta.4` release workflow. Earlier macOS checks were `202 passed, 1 skipped` (Windows-only cmd-wrapper test). |
 | `python -m compileall` / `py_compile` over source, services, platforms, screens, tests | PASS — no syntax errors. |
 | `uninstaller.py --version` / `--help` | PASS — standalone CLI starts and lists all options. |
 | `assets/make_icons.py` | PASS — ICO files contain 16/32/48/64/128/256 px frames and `anixo.png` source for `.icns`. |
@@ -84,7 +84,7 @@ been tested. Intel Mac builds are not published until independently tested.
 | Local packaging preflight | FIXED — stale/partial `dist/release/SHA256SUMS.txt` is now `NOT TESTED`, not a mandatory failure; CI rebuilds and verifies the published assets from the new tag. |
 | Update-screen initial button state flake | FIXED — `test_update_screen_buttons_are_mouse_and_keyboard_accessible` now waits for the async mount state instead of asserting after one `pilot.pause()`. |
 | Existing Textual timing flake | FIXED — `test_watch_without_history_opens_selector` now waits for the exclusive watch worker's screen state instead of relying on one `pilot.pause()` under full-suite load. |
-| Real GitHub tag, workflow run, and published release | PASS — the manager pushed the next sequential beta tag, found run `45670292462`, and all Windows/macOS build jobs plus the aggregated publish job succeeded. Verification passed for release metadata, 12 assets, HTTPS asset URLs, manifest schema/channel/7 pinned assets, 10 checksum entries, and agreement between GitHub, the manifest, and `SHA256SUMS.txt`. Real-terminal install/update behaviour remains a manual test. |
+| Real GitHub tag, workflow run, and published release | PASS — the manager pushed `v0.1.0-beta.4`, found run `45679602164`, and all four jobs succeeded (Windows x64, macOS arm64, macOS x86_64, aggregated publish). Verification passed for release metadata, 12 assets, HTTPS asset URLs, manifest schema/channel/7 pinned assets, 10 checksum entries, and agreement between GitHub, the manifest, and `SHA256SUMS.txt`. The configured beta updater also found beta.4 with 12 assets. Real-terminal install/update behaviour remains a manual test. |
 
 ## Episode-loading fix (2026-11-25)
 
@@ -95,7 +95,7 @@ been tested. Intel Mac builds are not published until independently tested.
 | Details → Select Episode | FIXED — Select Episode now resolves provider results and the exact season before opening the browser, and skips the resume prompt. Provider episode rows remain authoritative over AniList's planned count. |
 | Provider lookup failures | FIXED — failures are shown in the episode list instead of being silently converted to an empty page. The list shows a visible loading state, an actionable error message, and an `R` retry path; direct numeric playback still works. |
 | Automated coverage | PASS — new tests cover stale-to-finished metadata, resolved provider browsing without a resume prompt, provider failure messaging, and retry recovery. |
-| macOS compatibility of this fix | NOT TESTED locally; the tagged release workflow will run the same suite on both macOS runners. |
+| macOS compatibility of this fix | PASS — the `v0.1.0-beta.4` tagged workflow ran the same 280-test suite on both GitHub-hosted macOS runners and all build/publish jobs succeeded. |
 
 ## Episode-release, mouse, and performance work (2026-11-24)
 
