@@ -489,7 +489,17 @@ class ReleaseManager:
         ) * 60
         self._runner = runner or _default_runner
         self._confirm = confirmer or _default_confirm
-        self._print = printer or print
+        base_print = printer or print
+
+        def safe_print(message: str) -> None:
+            text = str(message)
+            try:
+                base_print(text)
+            except UnicodeEncodeError:
+                # Windows consoles can use cp1252 when stdin/stdout are piped.
+                base_print(text.encode("ascii", "replace").decode("ascii"))
+
+        self._print = safe_print
         self._fetcher = fetcher
         self._head_fetcher = head_fetcher
         self._sleep = sleep or time.sleep
@@ -525,7 +535,7 @@ class ReleaseManager:
     ) -> CheckResult:
         result = CheckResult(name=name, status=status, detail=_safe_detail(detail))
         results[name] = result
-        self._print(f"[{result.status}] {result.name}" + (f" — {result.detail}" if result.detail else ""))
+        self._print(f"[{result.status}] {result.name}" + (f" - {result.detail}" if result.detail else ""))
         return result
 
     def _print_results(self, title: str, results: Mapping[str, CheckResult]) -> None:
@@ -533,7 +543,7 @@ class ReleaseManager:
         for result in results.values():
             self._print(
                 f"  [{result.status}] {result.name}"
-                + (f" — {result.detail}" if result.detail else "")
+                + (f" - {result.detail}" if result.detail else "")
             )
 
     def _failures(self, results: Mapping[str, CheckResult]) -> list[str]:
@@ -637,7 +647,7 @@ class ReleaseManager:
         # With no explicit release_repo, the Git remote is authoritative.  This
         # keeps updater test forks in update_repo from blocking publication.
         self.repo = actual
-        self._record(results, "Git repository", PASSED, f"{self.remote} → {actual}")
+        self._record(results, "Git repository", PASSED, f"{self.remote} -> {actual}")
 
     def _check_branch(self, results: dict[str, CheckResult]) -> None:
         result = self._git("rev-parse", "--abbrev-ref", "HEAD")
@@ -660,7 +670,7 @@ class ReleaseManager:
         lines = [line for line in result.stdout.splitlines() if line.strip()]
         if lines:
             sample = ", ".join(lines[:8])
-            more = "…" if len(lines) > 8 else ""
+            more = "..." if len(lines) > 8 else ""
             self._record(
                 results,
                 "Working tree",
@@ -956,7 +966,7 @@ class ReleaseManager:
 
     def preflight(self, current: str, target: str) -> tuple[dict[str, CheckResult], list[Path]]:
         """Run every mandatory check before any file is modified."""
-        self._print(f"\nPreflight for ANIXO {current} → {target}")
+        self._print(f"\nPreflight for ANIXO {current} -> {target}")
         results: dict[str, CheckResult] = {}
         self._check_repository(results)
         self._check_branch(results)
@@ -1149,7 +1159,7 @@ class ReleaseManager:
         for job in failed:
             self._print(
                 f"[FAILED] Job {job.get('name') or '<unnamed>'}: "
-                f"{job.get('conclusion')} — {job.get('url') or run.url}"
+                f"{job.get('conclusion')} - {job.get('url') or run.url}"
             )
 
     def _monitor_workflow(self, tag: str, *, required: bool) -> WorkflowRun | None:
@@ -1429,7 +1439,7 @@ class ReleaseManager:
             self._print("Local tags:")
             for tag in tags.stdout.splitlines()[:limit]:
                 if tag.strip():
-                    self._print(f"  {tag.strip()} — {channel_for_version(tag.strip().lstrip('v'))}")
+                    self._print(f"  {tag.strip()} - {channel_for_version(tag.strip().lstrip('v'))}")
         else:
             self._print("Local tags: [NOT TESTED] no tags or git is unavailable.")
 
@@ -1462,8 +1472,8 @@ class ReleaseManager:
             tag = str(release.get("tagName") or "")
             channel = "beta" if release.get("isPrerelease") else "stable"
             self._print(
-                f"  {tag or '<untagged>'} — {channel} — "
-                f"{release.get('publishedAt') or '<unknown date>'} — {release.get('url') or ''}"
+                f"  {tag or '<untagged>'} - {channel} - "
+                f"{release.get('publishedAt') or '<unknown date>'} - {release.get('url') or ''}"
             )
         return 0
 

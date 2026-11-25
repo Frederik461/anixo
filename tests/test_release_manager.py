@@ -556,3 +556,23 @@ def test_untrusted_urls_are_rejected(tmp_path: Path) -> None:
 def test_sha256sums_parser_ignores_malformed_lines() -> None:
     parsed = rm.parse_sha256sums(f"{_digest()}  ANIXO.exe\nbad line\n")
     assert parsed == {"anixo.exe": _digest()}
+
+
+def test_printer_falls_back_on_cp1252_encoding_error(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    captured: list[str] = []
+
+    def cp1252_print(value: str) -> None:
+        text = str(value)
+        if any(ord(character) > 127 for character in text):
+            raise UnicodeEncodeError("cp1252", text, 0, 1, "unsupported")
+        captured.append(text)
+
+    config = Config()
+    config.release_repo = TOKEN
+    manager = rm.ReleaseManager(root, config, runner=FakeRunner(root), printer=cp1252_print)
+
+    manager._print("plain line")
+    manager._print("unicode \u2192 fallback")
+
+    assert captured == ["plain line", "unicode ? fallback"]
