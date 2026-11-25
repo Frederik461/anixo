@@ -28,7 +28,7 @@ from services.dependencies import diagnostics as dependency_diagnostics
 
 def test_product_identity_is_consistent() -> None:
     assert APP_NAME == "ANIXO"
-    assert VERSION == "0.1.0-beta.1"
+    assert VERSION == "0.1.0-beta.2"
     assert APP_TAGLINE == "Your anime. Your world."
     assert APP_DESCRIPTION == "A modern anime discovery and streaming application."
     assert "ANIXO" in " ".join(dependency_diagnostics(Config()))
@@ -47,12 +47,12 @@ def test_legacy_environment_aliases_still_supported(
 
 
 def test_parse_version_orders_beta_and_stable() -> None:
-    assert parse_version("0.1.0-beta.1") == (0, 1, 0, 1, "beta")
+    assert parse_version("0.1.0-beta.2") == (0, 1, 0, 1, "beta")
     assert parse_version("v1.2.3") == (1, 2, 3, 0, "")
 
     service = UpdateService(Config())
     releases = [
-        ReleaseInfo("0.1.0-beta.1", "v0.1.0-beta.1", "", "", True, ()),
+        ReleaseInfo("0.1.0-beta.2", "v0.1.0-beta.2", "", "", True, ()),
         ReleaseInfo("0.1.0", "v0.1.0", "", "", False, ()),
     ]
     # Stable releases outrank prereleases with the same numeric base.

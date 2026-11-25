@@ -78,7 +78,7 @@ def test_record_install_writes_platform_manifest(tmp_path: Path, capsys) -> None
 
 def test_version_option_exits_without_starting_app(capsys) -> None:
     assert main(["--version"]) == 0
-    assert "ANIXO 0.1.0-beta.1" in capsys.readouterr().out
+    assert "ANIXO 0.1.0-beta.2" in capsys.readouterr().out
 
 
 def test_unknown_option_is_rejected(capsys) -> None:

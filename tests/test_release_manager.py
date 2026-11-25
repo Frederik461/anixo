@@ -16,7 +16,7 @@ import pytest
 from config import Config
 from services import release_manager as rm
 
-CURRENT = "0.1.0-beta.1"
+CURRENT = "0.1.0-beta.2"
 NEXT_BETA = "0.1.0-beta.2"
 STABLE = "0.1.0"
 TOKEN = "Frederik461/anixo"
@@ -32,7 +32,7 @@ def _files(root: Path) -> dict[str, str]:
             'VersionInfoProductVersion=0.1.0.0\n'
             'VersionInfoVersion=0.1.0.0\n'
         ),
-        "uv.lock": '[[package]]\nname = "anixo"\nversion = "0.1.0b1"\n',
+        "uv.lock": '[[package]]\nname = "anixo"\nversion = "0.1.0b2"\n',
         ".github/workflows/release.yml": (
             "name: Release ANIXO\n"
             "on:\n  push:\n    tags:\n      - 'v*'\n"
@@ -47,7 +47,7 @@ def _files(root: Path) -> dict[str, str]:
         "packaging/validate_build.ps1": f"[string] $Version = '{CURRENT}'\n",
         "packaging/build_macos.sh": f'VERSION="${{1:-{CURRENT}}}"\n',
         "packaging/make_release_manifest.py": "print('generator')\n",
-        "packaging/validate_macos_runtime.py": "VERSION = '0.1.0-beta.1'\n",
+        "packaging/validate_macos_runtime.py": "VERSION = '0.1.0-beta.2'\n",
         "README.md": f"Current release {CURRENT} is available.\n",
         "anixo.spec": "spec\n",
         "anixo_macos.spec": "spec\n",
@@ -249,11 +249,11 @@ class FakeRunner:
         if key[:3] == ("gh", "release", "list"):
             payload = [
                 {
-                    "tagName": "v0.1.0-beta.1",
-                    "name": "ANIXO v0.1.0-beta.1",
+                    "tagName": "v0.1.0-beta.2",
+                    "name": "ANIXO v0.1.0-beta.2",
                     "isPrerelease": True,
                     "publishedAt": "2026-11-25T00:00:00Z",
-                    "url": "https://github.com/Frederik461/anixo/releases/tag/v0.1.0-beta.1",
+                    "url": "https://github.com/Frederik461/anixo/releases/tag/v0.1.0-beta.2",
                 }
             ]
             return rm.CommandResult(key, 0, json.dumps(payload), "")

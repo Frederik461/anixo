@@ -12,7 +12,7 @@
 param(
     [string] $Exe,
     [string] $BundleRoot,
-    [string] $Version = '0.1.0-beta.1',
+    [string] $Version = '0.1.0-beta.2',
     # String instead of [bool]: powershell.exe -File passes native arguments as
     # strings and Windows PowerShell 5.1 refuses to bind them to [bool].
     [string] $RequireBundleFiles = 'true'

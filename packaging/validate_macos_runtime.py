@@ -64,7 +64,7 @@ def install_record(
         "managed": owned,
         "safe_to_remove": owned,
         "install_location": str(path),
-        "version": "0.1.0-beta.1",
+        "version": "0.1.0-beta.2",
         "installed_at": "2026-01-01T00:00:00+00:00",
         "source": "macos-ci-validation",
         "install_method": "test-fixture",

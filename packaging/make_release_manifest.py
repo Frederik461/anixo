@@ -7,8 +7,8 @@ URL.  Secrets and credentials are never read or embedded.
 Usage:
     python packaging/make_release_manifest.py \
         --release-dir dist/release \
-        --version 0.1.0-beta.1 \
-        --base-url https://github.com/OWNER/REPO/releases/download/v0.1.0-beta.1 \
+        --version 0.1.0-beta.2 \
+        --base-url https://github.com/OWNER/REPO/releases/download/v0.1.0-beta.2 \
         --output dist/release/release-manifest.json
 """
 

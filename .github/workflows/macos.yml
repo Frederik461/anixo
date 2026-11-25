@@ -34,7 +34,7 @@ jobs:
             arch: x86_64
             label: Intel
     env:
-      APP_VERSION: 0.1.0-beta.1
+      APP_VERSION: 0.1.0-beta.2
       TARGET_ARCH: ${{ matrix.arch }}
       ARCH_LABEL: ${{ matrix.label }}
       MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
@@ -68,7 +68,7 @@ jobs:
         run: |
           set -euo pipefail
           ref="${GITHUB_REF_NAME}"
-          if [[ "$ref" =~ ^v[0-9] ]]; then version="${ref#v}"; else version='0.1.0-beta.1'; fi
+          if [[ "$ref" =~ ^v[0-9] ]]; then version="${ref#v}"; else version='0.1.0-beta.2'; fi
           echo "APP_VERSION=$version" >> "$GITHUB_ENV"
           echo "Building and testing ANIXO v$version for ${ARCH_LABEL} (${TARGET_ARCH})"
 

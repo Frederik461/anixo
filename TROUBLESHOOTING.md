@@ -1,6 +1,6 @@
 # Troubleshooting ANIXO
 
-ANIXO v0.1.0-beta.1 is a terminal application for Windows 10/11 x64 and macOS
+ANIXO v0.1.0-beta.2 is a terminal application for Windows 10/11 x64 and macOS
 13+ (Apple Silicon and Intel x86_64). Most problems fall into the categories
 below. Start by collecting diagnostics.
 
