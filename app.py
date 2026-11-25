@@ -1317,7 +1317,7 @@ class AnixoApp(App[None]):
                 check.message or f"UP TO DATE — ANIXO {check.current}"
             )
 
-    def action_update_anixo(self) -> None:
+    async def action_update_anixo(self) -> None:
         """Start the download/verify/install flow in a cancellable worker."""
         self.run_worker(
             self._update_anixo_flow(),

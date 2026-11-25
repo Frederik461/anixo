@@ -384,11 +384,17 @@ def test_render_test_screen_reports_geometry_and_survives_interaction(
             assert isinstance(screen, RenderTestScreen)
             assert "SIXEL" in screen.query_one("#render-status").content
 
-            for _ in range(30):
+            for _ in range(60):
                 await pilot.pause()
-                if len(list(screen.query(".poster-image"))) == 3:
+                images = list(screen.query(".poster-image"))
+                captions = [
+                    screen.query_one(f"#render-caption-{index}").content
+                    for index in range(3)
+                ]
+                if len(images) == 3 and all(
+                    "Original 600x900" in caption for caption in captions
+                ):
                     break
-            images = list(screen.query(".poster-image"))
             assert len(images) == 3
             assert all(isinstance(image, SixelImage) for image in images)
             for index in range(3):

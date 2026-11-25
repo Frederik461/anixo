@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from contextlib import nullcontext
 from pathlib import Path
@@ -15,6 +16,15 @@ from screens.discover import DiscoverScreen
 from screens.history import HistoryScreen
 from screens.settings import SettingsScreen
 from screens.watchlist import WatchlistScreen
+
+
+def test_update_action_is_awaitable(tmp_path: Path) -> None:
+    """Settings and Update screens await this action, so it must be a coroutine."""
+    app = AnixoApp(
+        config=Config(images="off", artwork_renderer="off"),
+        data_dir=tmp_path / "data",
+    )
+    assert inspect.iscoroutinefunction(app.action_update_anixo)
 
 
 def test_dashboard_startup_and_rapid_navigation(tmp_path: Path) -> None:
