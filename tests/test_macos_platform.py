@@ -153,7 +153,7 @@ def _record(
         managed=owned,
         safe_to_remove=owned,
         install_location=str(path),
-        version="0.1.0-beta.5",
+        version="0.1.0-beta.6",
         installed_at="2026-01-01T00:00:00+00:00",
         source="test",
         install_method="test",

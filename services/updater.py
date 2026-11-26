@@ -246,7 +246,7 @@ def detect_target(system: str | None = None, machine: str | None = None) -> Plat
 
 
 def parse_version(value: str) -> tuple[int, int, int, int, str]:
-    """Parse ``0.1.0-beta.5`` into ``(major, minor, patch, pre_number, label)``.
+    """Parse ``0.1.0-beta.6`` into ``(major, minor, patch, pre_number, label)``.
 
     A leading ``v`` and build metadata after ``+`` are ignored.  Stable
     versions have an empty label; malformed input yields a low, stable tuple

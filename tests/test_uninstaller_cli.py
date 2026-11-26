@@ -47,7 +47,7 @@ def _manifest(tmp_path: Path) -> tuple[ManifestStore, Path, Path, Path, Path, Pa
             managed=True,
             safe_to_remove=True,
             install_location=str(app),
-            version="0.1.0-beta.5",
+            version="0.1.0-beta.6",
             installed_at="2026-11-21T00:00:00+00:00",
             source="test",
             install_method="test",

@@ -4,7 +4,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $Version = '0.1.0-beta.5',
+    [string] $Version = '0.1.0-beta.6',
     [string] $RepoRoot = ''
 )
 

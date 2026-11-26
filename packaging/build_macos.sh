@@ -2,13 +2,13 @@
 # Build and validate the macOS ANIXO .app and DMG.
 #
 # Run on a macOS runner or Mac with Python 3.12 and uv available:
-#   bash packaging/build_macos.sh 0.1.0-beta.5
+#   bash packaging/build_macos.sh 0.1.0-beta.6
 #
 # Signing/notarization happen only when the Apple credentials are present.
 # An unsigned DMG is still produced and is clearly reported as unsigned.
 set -euo pipefail
 
-VERSION="${1:-0.1.0-beta.5}"
+VERSION="${1:-0.1.0-beta.6}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 

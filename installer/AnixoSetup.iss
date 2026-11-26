@@ -1,4 +1,4 @@
-; Inno Setup 6 script for ANIXO v0.1.0-beta.5 (Windows only, per-user install).
+; Inno Setup 6 script for ANIXO v0.1.0-beta.6 (Windows only, per-user install).
 ; Compile from the repository root with:
 ;   ISCC.exe installer\AnixoSetup.iss
 ;
@@ -8,7 +8,7 @@
 ; and progress are never touched.
 
 #define MyAppName "ANIXO"
-#define MyAppVersion "0.1.0-beta.5"
+#define MyAppVersion "0.1.0-beta.6"
 #define MyAppPublisher "ANIXO"
 #define MyAppExeName "Anixo.exe"
 

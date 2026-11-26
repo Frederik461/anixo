@@ -191,8 +191,8 @@ deleted. Redacted update events are written to the data directory.
 Maintainers publish from the repository with the integrated release manager:
 
 ```text
-Anixo release beta               # 0.1.0-beta.5 → 0.1.0-beta.5
-Anixo release stable             # 0.1.0-beta.5 → 0.1.0 (requires typing "stable")
+Anixo release beta               # 0.1.0-beta.6 → 0.1.0-beta.6
+Anixo release stable             # 0.1.0-beta.6 → 0.1.0 (requires typing "stable")
 Anixo release check [tag]        # resume workflow/asset verification for an existing tag
 Anixo release history [limit]    # list local tags and GitHub Releases
 ```
