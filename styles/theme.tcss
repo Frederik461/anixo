@@ -776,6 +776,39 @@ UninstallScreen {
     margin: 0 1;
 }
 
+CrashReportScreen {
+    align: center middle;
+}
+
+#crash-report-dialog {
+    width: 80;
+    max-width: 94%;
+    height: auto;
+    max-height: 88%;
+    background: $panel;
+    border: solid $accent;
+    padding: 1 2;
+}
+
+.crash-report-title {
+    color: $text;
+    text-style: bold;
+}
+
+#crash-report-scroll {
+    height: 16;
+    margin: 1 0;
+}
+
+#crash-report-actions {
+    height: 3;
+    align: center middle;
+}
+
+#crash-report-actions Button {
+    margin: 0 1;
+}
+
 Toast {
     background: $accent-dim;
     color: $text;

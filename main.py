@@ -19,6 +19,7 @@ from config import (
 )
 from platforms import get_platform_adapter
 from services.ani_cli import AniCliService
+from services.crash_report import install_global, uninstall_global
 from services.dependency_manager import DependencyManager
 from services.diagnostics import build_report
 from services.image_cache import ImageCache
@@ -288,12 +289,17 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     legacy_dir = Path(args.migrate_from).resolve() if args.migrate_from else None
-    AnixoApp(
-        config=config,
-        data_dir=data_dir,
-        legacy_data_dir=legacy_dir,
-        config_path=config_path,
-    ).run()
+    reporter = install_global(default_log_dir())
+    try:
+        AnixoApp(
+            config=config,
+            data_dir=data_dir,
+            legacy_data_dir=legacy_dir,
+            config_path=config_path,
+            crash_reporter=reporter,
+        ).run()
+    finally:
+        uninstall_global()
     return 0
 
 

@@ -35,7 +35,7 @@ _QUERY_SECRET = re.compile(
 )
 
 
-def _redact(value: object) -> str:
+def _redact(value: object, *, limit: int = 500) -> str:
     """Remove credentials, userinfo, and signed URL parameters from text."""
     text = str(value)
     text = _LABEL_SECRET.sub(
@@ -48,7 +48,12 @@ def _redact(value: object) -> str:
     text = _BEARER.sub("Bearer <redacted>", text)
     text = _URL_CREDENTIALS.sub(lambda match: f"{match.group('scheme')}<redacted>@", text)
     text = _QUERY_SECRET.sub(r"\1<redacted>", text)
-    return text[:500]
+    return text[: max(1, limit)]
+
+
+def redact_sensitive_text(value: object, *, limit: int = 500) -> str:
+    """Public redaction helper shared by health and crash-report surfaces."""
+    return _redact(value, limit=limit)
 
 
 @dataclass(frozen=True, slots=True)

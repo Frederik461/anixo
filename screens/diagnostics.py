@@ -20,6 +20,7 @@ class DiagnosticsScreen(ShellScreen):
     BINDINGS = [
         Binding("r", "refresh", "Refresh"),
         Binding("e", "export", "Export"),
+        Binding("c", "crash_report", "Crash report"),
         Binding("escape", "back", "Back", show=False),
     ]
 
@@ -41,6 +42,11 @@ class DiagnosticsScreen(ShellScreen):
                     yield Button(
                         "↧  Export report",
                         id="diagnostics-export",
+                        classes="action-button",
+                    )
+                    yield Button(
+                        "⧉  Crash report",
+                        id="diagnostics-crash",
                         classes="action-button",
                     )
                 with VerticalScroll(id="diagnostics-scroll"):
@@ -82,11 +88,19 @@ class DiagnosticsScreen(ShellScreen):
         event.stop()
         await self.action_export()
 
+    @on(Button.Pressed, "#diagnostics-crash")
+    def on_crash_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.action_crash_report()
+
     async def action_refresh(self) -> None:
         await self.app.action_diagnostics_refresh()
 
     async def action_export(self) -> None:
         await self.app.action_diagnostics_export()
+
+    def action_crash_report(self) -> None:
+        self.app.action_crash_report()
 
     def action_back(self) -> None:
         """Leave the screen via an app-specific action, else pop the stack."""

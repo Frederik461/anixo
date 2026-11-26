@@ -41,6 +41,7 @@ from models.anime import Anime, HistoryEntry, is_same_anime, next_episode
 from models.episode import episode_number, is_series_completed
 from platforms import get_platform_adapter
 from screens.anime_details import AnimeDetailsScreen
+from screens.crash_report import CrashReportScreen
 from screens.dashboard import DashboardScreen
 from screens.diagnostics import DiagnosticsScreen
 from screens.discover import DiscoverScreen
@@ -58,6 +59,7 @@ from services.anime_api import AnimeAPI
 from services.dependency_manager import DependencyManager
 from services.franchise import Franchise, group_franchises
 from services.artwork import ArtworkService
+from services.crash_report import CrashReporter
 from services.diagnostics import build_report, export_report
 from services.image_cache import ImageCache
 from services.install_manifest import COMPONENT_APP, ManifestStore
@@ -168,6 +170,7 @@ class AnixoApp(App[None]):
         legacy_data_dir: Path | None = None,
         config_path: Path | None = None,
         force_setup: bool = False,
+        crash_reporter: CrashReporter | None = None,
     ) -> None:
         self.config = config or Config()
         self.config.validate()
@@ -204,6 +207,7 @@ class AnixoApp(App[None]):
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir = default_log_dir()
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.crash_reporter = crash_reporter
 
         self.install_dir = (
             Path(sys.executable).resolve().parent
@@ -300,7 +304,14 @@ class AnixoApp(App[None]):
         if False:  # pragma: no cover - generator typing only
             yield Static("")
 
+    def _handle_exception(self, error: Exception) -> None:
+        if self.crash_reporter is not None:
+            self.crash_reporter.handle_exception(error, source="textual")
+        super()._handle_exception(error)
+
     async def on_mount(self) -> None:
+        if self.crash_reporter is not None:
+            self.crash_reporter.attach_loop()
         # A separate legacy directory is offered in the setup wizard instead of
         # being silently imported. Same-directory legacy JSON is still migrated
         # automatically for compatibility with older launch configurations.
@@ -1228,6 +1239,17 @@ class AnixoApp(App[None]):
 
     def action_diagnostics_back(self) -> None:
         self.action_goto_settings()
+
+    def action_crash_report(self) -> None:
+        """Open the redacted crash report screen from any mounted context."""
+        reporter = self.crash_reporter or CrashReporter(self.log_dir)
+        report = reporter.latest()
+        text = (
+            report.summary() + "\n" + report.traceback
+            if report is not None
+            else "No crash report has been recorded."
+        )
+        self.push_screen(CrashReportScreen(text))
 
     # ------------------------------------------------------------------
     # Updates (ANIXO and ani-cli)
