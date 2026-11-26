@@ -245,7 +245,9 @@ class AnixoApp(App[None]):
             self.data_dir, self.cache_dir
         )
         self.ani_cli = AniCliService(self.config, managed_dir=managed_ani_cli_dir)
-        self.provider = ProviderService(self.ani_cli.provider_base_url())
+        self.provider = ProviderService(
+            self.ani_cli.provider_base_url(), kind=self.ani_cli.provider_family()
+        )
         self.updates = UpdateService(self.config, data_dir=self.data_dir, adapter=self.platform)
         self.ani_cli_updates = AniCliUpdateService(
             self.config,
@@ -1509,9 +1511,17 @@ class AnixoApp(App[None]):
         except OSError:
             pass
 
+    def _refresh_provider_service(self) -> None:
+        """Rebind provider reads to the installed ani-cli revision's provider."""
+        self.provider = ProviderService(
+            self.ani_cli.provider_base_url(), kind=self.ani_cli.provider_family()
+        )
+
     async def _auto_check_ani_cli_updates(self) -> None:
         check = await self.ani_cli_updates.check_async()
         self.ani_cli_check = check
+        self._refresh_provider_service()
+        self.config_store.save(self.config)
         if check.error or check.cached:
             return
         self.config.last_ani_cli_check = check.last_checked
@@ -1523,6 +1533,8 @@ class AnixoApp(App[None]):
         check = await self.ani_cli_updates.check_async(force=True)
         self.ani_cli_check = check
         self.ani_cli_status = self.ani_cli_updates.detect_installed()
+        self._refresh_provider_service()
+        self.config_store.save(self.config)
         if not check.error:
             self.config.last_ani_cli_check = check.last_checked
             self.config_store.save(self.config)
@@ -1530,7 +1542,13 @@ class AnixoApp(App[None]):
 
     async def action_update_ani_cli(self) -> Any:
         """Run the staged ani-cli update off the UI thread."""
-        return await asyncio.to_thread(self.ani_cli_updates.update, self.ani_cli_check)
+        result = await asyncio.to_thread(
+            self.ani_cli_updates.update, self.ani_cli_check
+        )
+        if result.ok:
+            self._refresh_provider_service()
+            self.config_store.save(self.config)
+        return result
 
     async def _missing_playback_components(self) -> list[str]:
         statuses = await asyncio.to_thread(dependency_statuses, self.config, self.ani_cli)

@@ -22,7 +22,13 @@ import updater_helper
 from config import Config
 from platforms import WINDOWS, PlatformAdapter
 from services import setup as setup_service
-from services.ani_cli import _MENU_ANCHOR, _SEARCH_ANCHOR
+from services.ani_cli import (
+    AniCliService,
+    _MENU_ANCHOR,
+    _SEARCH_ANCHOR,
+    _SEARCH_ANCHOR_V2,
+    provider_family_from_source,
+)
 from services.ani_cli_updater import AniCliUpdateCheck, AniCliUpdateService
 from services.dependency_manager import DependencyManager
 from services.install_manifest import COMPONENT_ANI_CLI, InstallRecord, ManifestStore
@@ -56,6 +62,22 @@ def _source(version: str) -> bytes:
         "base_api=https://example.invalid\n"
     ).encode("utf-8")
     return head + (_SEARCH_ANCHOR + _MENU_ANCHOR).encode("utf-8") + (
+        b"\n" + b"# padding line\n" * 400
+    )
+
+
+def _source_miruro(
+    version: str, base_url: str = "https://example.invalid/miruro"
+) -> bytes:
+    head = (
+        f"#!/usr/bin/env bash\n# ani-cli {version}\n"
+        "version_number=synthetic\n"
+        f'miruro_base="{base_url}"\n'
+        "miruro_search() { :; }\n"
+        "miruro_episodes() { :; }\n"
+        "ANI_CLI_EXACT=0\n"
+    ).encode("utf-8")
+    return head + (_SEARCH_ANCHOR_V2 + _MENU_ANCHOR).encode("utf-8") + (
         b"\n" + b"# padding line\n" * 400
     )
 
@@ -339,6 +361,39 @@ def test_successful_update_verifies_and_records_managed_copy(
     assert record is not None and record.version == candidate_version
     assert config.ani_cli_path == str(state.script)
     assert Path(result.backup).is_dir()
+
+
+def test_provider_url_follows_installed_miruro_revision(tmp_path: Path) -> None:
+    managed_root = tmp_path / "persistent" / "ani-cli"
+    _, manager, _ = _manager(tmp_path, managed_root)
+    payload = _source_miruro(APP_VERSION)
+    state = _seed_managed(manager, payload, APP_VERSION)
+    ani_cli = AniCliService(manager.config, managed_dir=managed_root)
+
+    assert ani_cli.provider_base_url() == "https://example.invalid/miruro"
+    assert ani_cli.provider_family() == "miruro"
+
+
+def test_update_syncs_provider_url_from_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    managed_root = tmp_path / "persistent" / "ani-cli"
+    config, manager, _ = _manager(tmp_path, managed_root)
+    _seed_managed(manager, _source(APP_VERSION), APP_VERSION)
+    candidate_version = _derived_version(APP_VERSION)
+    candidate = _source_miruro(candidate_version)
+    service = _service(manager, manager.managed_ani_cli.script_path)
+    _patch_bash(monkeypatch)
+    monkeypatch.setattr(service, "_download", lambda url, cancel=None: candidate)
+
+    result = service.update(_check(candidate_version, candidate, available=True))
+
+    assert result.ok is True
+    assert config.ani_cli_base_url == "https://example.invalid/miruro"
+    state = service.managed.read()
+    assert state is not None
+    assert provider_family_from_source(state.script.read_text(encoding="utf-8")) == "miruro"
+    assert state.script.read_bytes() == candidate
 
 
 # ---------------------------------------------------------------------------

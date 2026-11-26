@@ -1,4 +1,4 @@
-"""Read-only HiAnime provider adapter used by ANIXO's own selectors.
+"""Read-only provider adapter used by ANIXO's own selectors.
 
 ani-cli exposes only ``id<TAB>title`` search rows and ``episode-id<TAB>number``
 episode rows, and its CLI cannot accept a chosen result ID.  ANIXO therefore
@@ -16,6 +16,7 @@ import html
 import re
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -76,6 +77,120 @@ class ProviderEpisode:
 
 def _unescape(value: str) -> str:
     return html.unescape(value).strip()
+
+
+_MIRURO_NUMBER_RE = re.compile(
+    r"(?:[,{;]number:|\.number=)([0-9]+(?:\.[0-9]+)?)"
+)
+
+
+def _js_string(value: str) -> str:
+    decoded = (
+        value.replace('\\"', '"')
+        .replace("\\n", " ")
+        .replace("\\r", " ")
+        .replace("\\t", " ")
+    )
+    return _unescape(decoded)
+
+
+def _js_field(block: str, name: str) -> str:
+    match = re.search(
+        rf'\b{re.escape(name)}:"((?:\\.|[^"\\])*)"', block, re.DOTALL
+    )
+    return _js_string(match.group(1)) if match else ""
+
+
+def _detect_provider_kind(base_url: str) -> str:
+    host = (urlparse(base_url).hostname or "").lower()
+    return "miruro" if "miruro" in host else "hianime"
+
+
+def _miruro_site_id(source_id: str) -> str:
+    parts = str(source_id or "").strip().split(":")
+    if len(parts) >= 2 and parts[0].isdigit():
+        candidate = parts[1]
+    else:
+        candidate = parts[0]
+    return candidate if re.fullmatch(r"[A-Za-z0-9_-]+", candidate) else ""
+
+
+def parse_miruro_search_page(page: str) -> list[ProviderAnime]:
+    """Parse Miruro's Next.js search payload into exact composite result IDs."""
+    marker = re.search(r"items:\[(.*?)\],\s*entityItems:", page, re.IGNORECASE | re.DOTALL)
+    if not marker:
+        return []
+    body = marker.group(1).replace('},{id:"', '}\n{id:"')
+    results: list[ProviderAnime] = []
+    for block in body.splitlines():
+        if '{id:"' not in block:
+            continue
+        site_id = _js_field(block, "id")
+        anilist = re.search(r'\banilist:\["([^"]+)"\]', block)
+        if not site_id or not anilist:
+            continue
+        al_id = str(anilist.group(1)).strip()
+        if not al_id.isdigit():
+            continue
+        title_block = re.search(r"title:\{(.*?)\}", block, re.DOTALL)
+        title = ""
+        if title_block:
+            title = (
+                _js_field(title_block.group(1), "english")
+                or _js_field(title_block.group(1), "romaji")
+                or _js_field(title_block.group(1), "native")
+            )
+        if not title:
+            continue
+        metadata: dict[str, str] = {}
+        media_format = _js_field(block, "format").upper()
+        if media_format in _KNOWN_FORMATS:
+            metadata["format"] = media_format
+        counts = re.search(r"episode_counts:\{([^}]*)\}", block)
+        count = ""
+        if counts:
+            for key in ("raw", "sub", "dub"):
+                found = re.search(rf"\b{key}:(\d+)", counts.group(1))
+                if found:
+                    count = found.group(1)
+                    break
+        if not count:
+            found = re.search(r"\bepisode_count:(\d+)", block)
+            count = found.group(1) if found else ""
+        if count:
+            metadata["episode_count"] = count
+        description = _js_field(block, "description")
+        if description:
+            metadata["description"] = description.rstrip(".")
+        poster = _js_field(block, "cover_url")
+        if poster:
+            metadata["poster_url"] = poster
+        results.append(
+            ProviderAnime(
+                source_id=f"{al_id}:{site_id}:",
+                title=title,
+                numeric_id=al_id,
+                metadata=metadata,
+            )
+        )
+    return results
+
+
+def parse_miruro_episode_page(payload: Any, site_id: str) -> list[ProviderEpisode]:
+    """Parse Miruro's watch page into exact episode numbers from the provider."""
+    document = str(payload.get("html") or "") if isinstance(payload, dict) else str(payload or "")
+    numbers: list[str] = []
+    seen: set[str] = set()
+    for value in _MIRURO_NUMBER_RE.findall(document):
+        if value in seen:
+            continue
+        seen.add(value)
+        numbers.append(value)
+    numbers.sort(key=lambda value: float(value))
+    return [
+        ProviderEpisode(number=value, provider_episode_id=f"{site_id}:{value}")
+        for value in numbers
+    ]
 
 
 def parse_search_page(page: str) -> list[ProviderAnime]:
@@ -184,9 +299,16 @@ class ProviderService:
         self,
         base_url: str | None = None,
         client: httpx.Client | None = None,
+        kind: str | None = None,
     ) -> None:
         self.base_url = (base_url or _DEFAULT_BASE_URL).rstrip("/")
         self._client = client
+        requested = str(kind or "").strip().lower()
+        self.kind = (
+            requested
+            if requested in {"miruro", "hianime"}
+            else _detect_provider_kind(self.base_url)
+        )
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -221,13 +343,20 @@ class ProviderService:
         clean = (query or "").strip()
         if not clean:
             return []
-        from urllib.parse import quote
-
+        if self.kind == "miruro":
+            response = self._get(f"/search?q={quote(clean)}")
+            return parse_miruro_search_page(response.text)
         response = self._get(f"/search?keyword={quote(clean)}")
         return parse_search_page(response.text)
 
     def episodes(self, source_id: str) -> list[ProviderEpisode]:
         """Return episodes for one exact provider result ID."""
+        if self.kind == "miruro":
+            site_id = _miruro_site_id(source_id)
+            if not site_id:
+                raise ProviderError(f"Invalid provider ID: {source_id}")
+            response = self._get(f"/watch/{quote(site_id)}/x?ep=1")
+            return parse_miruro_episode_page(response.text, site_id)
         numeric = re.search(r"(\d+)$", source_id)
         if not numeric:
             raise ProviderError(f"Invalid provider ID: {source_id}")

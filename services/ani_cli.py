@@ -11,6 +11,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -41,12 +42,11 @@ _EXACT_FILTER = r'''        # ANIXO exact provider selection: keep only the ID c
             [ -n "$anime_list" ] || die "Selected provider result is no longer available"
         fi
 '''
-# ani-cli 5.2 emits ``AniListID:siteID:`` result keys.  ANIXO's authoritative
-# provider row carries the same AniList ID as the trailing numeric part of its
-# source ID, so matching the first colon-delimited field stays an exact check.
-_EXACT_FILTER_V2 = r'''        # ANIXO exact provider selection: keep only the AniList ID chosen in ANIXO.
+# ani-cli 5.2 emits ``AniListID:siteID:`` result keys.  ANIXO stores that whole
+# key as the provider row ID, so the filter stays an exact equality check.
+_EXACT_FILTER_V2 = r'''        # ANIXO exact provider selection: keep only the exact ID chosen in ANIXO.
          if [ -n "$ANI_CLI_PROVIDER_ID" ]; then
-             anime_list="$(printf "%s\n" "$anime_list" | awk -F '\t' -v id="$ANI_CLI_PROVIDER_ID" '{ split($1, parts, ":"); if (parts[1] == id) { print; exit } }')"
+             anime_list="$(printf "%s\n" "$anime_list" | awk -F '\t' -v id="$ANI_CLI_PROVIDER_ID" '$1 == id { print; exit }')"
              [ -n "$anime_list" ] || die "Selected provider result is no longer available"
          fi
 '''
@@ -102,10 +102,33 @@ def _uses_composite_provider_ids(source: str) -> bool:
     return _SEARCH_ANCHOR_V2 in source or "miruro_search()" in source
 
 
-def _anilist_id(provider_id: str) -> str:
-    """Return the exact AniList ID carried by an ANIXO provider row."""
-    match = re.search(r"(\d+)$", provider_id.strip())
-    return match.group(1) if match else ""
+_PROVIDER_BASE_RE = re.compile(
+    r'^\s*(?:base_api|miruro_base)=["\']([^"\']+)["\']',
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def provider_base_url_from_source(source: str) -> str:
+    """Return the provider URL declared by a verified ani-cli script."""
+    match = _PROVIDER_BASE_RE.search(source)
+    if not match:
+        return ""
+    url = match.group(1).strip().rstrip("/")
+    parsed = urlparse(url)
+    if parsed.scheme.lower() != "https" or not parsed.netloc:
+        return ""
+    if parsed.username or parsed.password or "@" in parsed.netloc:
+        return ""
+    return url
+
+
+def provider_family_from_source(source: str) -> str:
+    """Return the provider family used by a verified ani-cli script."""
+    if "miruro_base=" in source or "miruro_search()" in source:
+        return "miruro"
+    if "base_api=" in source or "hianime_search" in source:
+        return "hianime"
+    return ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +208,7 @@ class AniCliService:
         self.config = config
         self.managed = ManagedAniCli(managed_dir) if managed_dir is not None else None
         self._provider_url: str | None = None
+        self._provider_family: str | None = None
         self._exit_after_play: bool | None = None
 
     # ------------------------------------------------------------------
@@ -496,24 +520,38 @@ class AniCliService:
     # Provider title resolution
 
     def provider_base_url(self) -> str:
+        """Return the provider URL declared by the installed ani-cli revision."""
         if self._provider_url:
             return self._provider_url
+        declared = ""
         script = self.installed_script()
-        configured = None
         if script:
             try:
-                match = re.search(
-                    r'^\s*base_api=["\']([^"\']+)["\']',
-                    script.read_text(encoding="utf-8", errors="replace"),
-                    re.IGNORECASE | re.MULTILINE,
+                declared = provider_base_url_from_source(
+                    script.read_text(encoding="utf-8", errors="replace")
                 )
-                configured = match.group(1) if match else None
             except OSError:
-                configured = None
+                declared = ""
         self._provider_url = (
-            configured or self.config.ani_cli_base_url or _DEFAULT_PROVIDER
+            declared or self.config.ani_cli_base_url or _DEFAULT_PROVIDER
         ).rstrip("/")
         return self._provider_url
+
+    def provider_family(self) -> str:
+        """Return ``miruro`` or ``hianime`` for the installed ani-cli revision."""
+        if self._provider_family:
+            return self._provider_family
+        declared = ""
+        script = self.installed_script()
+        if script:
+            try:
+                declared = provider_family_from_source(
+                    script.read_text(encoding="utf-8", errors="replace")
+                )
+            except OSError:
+                declared = ""
+        self._provider_family = declared or "hianime"
+        return self._provider_family
 
     async def resolve_source_title(self, source_id: str) -> str | None:
         numeric = re.search(r"(\d+)$", source_id)
@@ -558,7 +596,6 @@ class AniCliService:
                 else player
             )
         if provider_id:
-            effective_provider_id = provider_id
             composite = False
             script = self.installed_script()
             if script:
@@ -567,9 +604,9 @@ class AniCliService:
                 except OSError:
                     script_text = ""
                 composite = _uses_composite_provider_ids(script_text)
-                if composite:
-                    effective_provider_id = _anilist_id(provider_id)
-            environment["ANI_CLI_PROVIDER_ID"] = effective_provider_id
+            # The provider row ID is exact for both layouts: a HiAnime slug or a
+            # composite AniListID:siteID: key.  Never weaken it to a title match.
+            environment["ANI_CLI_PROVIDER_ID"] = provider_id
             if composite:
                 # ANIXO's ID filter is authoritative; title matching stays off.
                 environment["ANI_CLI_EXACT"] = "0"

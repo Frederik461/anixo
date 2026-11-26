@@ -33,6 +33,8 @@ from services.ani_cli import (
     AniCliPatchError,
     AniCliService,
     patch_exact_provider_selection,
+    provider_base_url_from_source,
+    provider_family_from_source,
 )
 from services.dependency_manager import DependencyManager
 from services.install_manifest import COMPONENT_ANI_CLI
@@ -227,6 +229,28 @@ class AniCliUpdateService:
             )
         return self.manager
 
+    def _sync_provider_url(self, script: Path | None = None) -> bool:
+        """Follow the provider URL declared by the installed ani-cli revision."""
+        source_path = script or self.ani_cli.installed_script()
+        if not source_path or not source_path.exists():
+            return False
+        try:
+            source = source_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return False
+        url = provider_base_url_from_source(source)
+        if not url:
+            return False
+        self.ani_cli._provider_url = url
+        self.ani_cli._provider_family = (
+            provider_family_from_source(source) or "hianime"
+        )
+        if self.config.ani_cli_base_url.rstrip("/") == url:
+            return False
+        self.config.ani_cli_base_url = url
+        self.log.log("ani_cli_provider_url_synced", source=url)
+        return True
+
     def detect_installed(self) -> AniCliInstalled:
         """Report the managed copy first; never claim an independent one is owned.
 
@@ -311,6 +335,7 @@ class AniCliUpdateService:
     def check(self, *, force: bool = False) -> AniCliUpdateCheck:
         """Check the verified upstream release without changing anything."""
         installed = self.detect_installed()
+        self._sync_provider_url()
         if not force:
             cached = self._read_cache()
             if cached and not cached.error:
@@ -554,6 +579,7 @@ class AniCliUpdateService:
                     "ani-cli patch is out of date for this ani-cli version; "
                     "the installed candidate could not be verified."
                 ) from error
+            self._sync_provider_url(installed_path)
             self._manager().record_ani_cli_update(
                 version=check.latest_version,
                 source=check.asset_url,
@@ -561,9 +587,15 @@ class AniCliUpdateService:
                 sha256=actual,
                 config_path=str(installed_path),
             )
+            final_installed = self.detect_installed()
+            cache_version = (
+                final_installed.version
+                if final_installed.installed and final_installed.digest.upper() == actual
+                else check.latest_version
+            )
             self._write_cache(
                 AniCliUpdateCheck(
-                    state.version or installed.version,
+                    cache_version,
                     check.latest_version,
                     False,
                     _timestamp(),

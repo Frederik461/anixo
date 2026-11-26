@@ -207,8 +207,8 @@ def test_composite_layout_patch_is_exact_and_layout_specific() -> None:
         ani_cli_module._SEARCH_ANCHOR_V2 + ani_cli_module._EXACT_FILTER_V2
         in patched
     )
-    assert "split($1, parts," in patched
-    assert "parts[1] == id" in patched
+    assert "$1 == id" in patched
+    assert "split($1, parts," not in patched
     assert "hianime_search" not in patched
     assert ani_cli_module._SEARCH_ANCHOR not in patched
 
@@ -225,7 +225,7 @@ def test_structural_validation_accepts_only_known_layouts() -> None:
     assert setup_service._looks_like_ani_cli(b"#!/bin/sh\n" + b"x" * 5000) is False
 
 
-def test_composite_environment_uses_exact_anilist_id(tmp_path: Path) -> None:
+def test_composite_environment_uses_exact_provider_id(tmp_path: Path) -> None:
     script = tmp_path / "managed" / "ani-cli"
     script.parent.mkdir()
     script.write_bytes(_source_composite())
@@ -236,16 +236,15 @@ def test_composite_environment_uses_exact_anilist_id(tmp_path: Path) -> None:
     invocation = AniCliInvocation("direct", "ani-cli", (), str(script))
     numeric = re.match(r"^v?\d+\.\d+\.(\d+)", APP_VERSION)
     assert numeric is not None
+    exact_id = f"{numeric.group(1)}:site-{numeric.group(1)}:"
 
-    environment = service._environment(
-        invocation, provider_id=f"series-name-{numeric.group(1)}"
-    )
-    assert environment["ANI_CLI_PROVIDER_ID"] == numeric.group(1)
+    environment = service._environment(invocation, provider_id=exact_id)
+    assert environment["ANI_CLI_PROVIDER_ID"] == exact_id
     assert environment["ANI_CLI_EXACT"] == "0"
     assert environment["ANI_CLI_MENU"] == "false"
 
-    refusing = service._environment(invocation, provider_id="no-numeric-id")
-    assert refusing["ANI_CLI_PROVIDER_ID"] == ""
+    unmatched = service._environment(invocation, provider_id="no-composite-id")
+    assert unmatched["ANI_CLI_PROVIDER_ID"] == "no-composite-id"
 
 
 def test_pin_checker_accepts_composite_layout() -> None:
