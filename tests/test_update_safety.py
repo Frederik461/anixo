@@ -41,6 +41,26 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest().lower()
 
 
+class _WindowsOsProxy:
+    """An ``os`` stand-in that reports Windows without changing pathlib.
+
+    Patching the real ``os.name`` also switches ``pathlib.Path`` to
+    ``WindowsPath`` on macOS, which breaks POSIX temporary paths.  Only the
+    updater helper's view of the platform needs to change here.
+    """
+
+    def __init__(self, real: Any, name: str) -> None:
+        self._real = real
+        self.name = name
+
+    def __getattr__(self, item: str) -> Any:
+        return getattr(self._real, item)
+
+
+def _windows_os() -> _WindowsOsProxy:
+    return _WindowsOsProxy(os, "nt")
+
+
 def _higher_version() -> str:
     """Return a clearly newer version derived from the installed version."""
     match = re.match(r"^v?(\d+)\.(\d+)\.(\d+)", APP_VERSION)
@@ -495,10 +515,21 @@ def test_snapshot_skips_reparse_points(tmp_path: Path, monkeypatch: Any) -> None
     assert not any("junction" in item for item in directories)
 
 
+def test_windows_simulation_does_not_change_path_flavor(monkeypatch: Any) -> None:
+    """Simulating Windows for the helper must not switch pathlib's flavor."""
+    import pathlib
+
+    monkeypatch.setattr(os, "name", "posix")
+    original = type(pathlib.Path("probe")).__name__
+    monkeypatch.setattr(updater_helper, "os", _windows_os())
+    assert type(pathlib.Path("probe")).__name__ == original
+    assert updater_helper.os.name == "nt"
+
+
 def test_parent_alive_fails_closed_on_simulated_windows(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    monkeypatch.setattr(updater_helper.os, "name", "nt")
+    monkeypatch.setattr(updater_helper, "os", _windows_os())
     monkeypatch.setattr(updater_helper, "_pid_alive", lambda pid: True)
     monkeypatch.setattr(updater_helper, "_process_start_epoch", lambda pid: None)
     with pytest.raises(updater_helper.UpdateHelperError, match="still running") as error:
@@ -520,7 +551,7 @@ def test_parent_pid_reuse_fails_closed(monkeypatch: Any) -> None:
 def test_parent_alive_failure_writes_failed_marker(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    monkeypatch.setattr(updater_helper.os, "name", "nt")
+    monkeypatch.setattr(updater_helper, "os", _windows_os())
     monkeypatch.setattr(updater_helper, "_pid_alive", lambda pid: True)
     monkeypatch.setattr(updater_helper, "_process_start_epoch", lambda pid: None)
     original_wait = updater_helper._wait_for_parent
