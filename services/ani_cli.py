@@ -18,6 +18,7 @@ from config import Config, default_cache_dir, expand_path
 from platforms import get_platform_adapter
 from data.database import Database
 from models.anime import Anime, normalize_title
+from services.managed_ani_cli import ManagedAniCli
 
 _DEFAULT_HISTORY = Path(".local/state/ani-cli/ani-hsts")
 _DEFAULT_PROVIDER = "https://hianime.at"
@@ -151,8 +152,11 @@ def record_to_anime(record: AniCliRecord) -> dict[str, Any]:
 
 
 class AniCliService:
-    def __init__(self, config: Config) -> None:
+    def __init__(
+        self, config: Config, managed_dir: Path | str | None = None
+    ) -> None:
         self.config = config
+        self.managed = ManagedAniCli(managed_dir) if managed_dir is not None else None
         self._provider_url: str | None = None
         self._exit_after_play: bool | None = None
 
@@ -245,6 +249,29 @@ class AniCliService:
 
     def resolve_invocation(self) -> AniCliInvocation | None:
         adapter = get_platform_adapter()
+        if self.managed is not None:
+            state = self.managed.read()
+            if state and state.script.exists():
+                script = state.script.resolve()
+                wrapper = state.wrapper
+                if (
+                    wrapper.exists()
+                    and adapter.supports_cmd_wrappers()
+                    and not adapter.bash_executable(self.config.git_bash_path)
+                ):
+                    return AniCliInvocation(
+                        "cmd", "cmd.exe", (), str(wrapper.resolve())
+                    )
+                bash = self._find_git_bash()
+                if bash:
+                    return AniCliInvocation(
+                        "bash",
+                        bash,
+                        (adapter.to_shell_path(script),),
+                        str(script),
+                    )
+                if os.access(script, os.X_OK):
+                    return AniCliInvocation("direct", str(script), (), str(script))
         configured = (
             Path(expand_path(self.config.ani_cli_path))
             if self.config.ani_cli_path
@@ -393,7 +420,12 @@ class AniCliService:
         except OSError:
             return None
         digest = hashlib.sha256(payload).hexdigest().upper()
-        if digest not in _KNOWN_PROVIDER_SHA256:
+        managed_digest = ""
+        if self.managed is not None:
+            state = self.managed.read()
+            if state and state.script.resolve() == source.resolve():
+                managed_digest = state.sha256.upper()
+        if digest not in _KNOWN_PROVIDER_SHA256 and digest != managed_digest:
             return None
         try:
             patched = patch_exact_provider_selection(payload.decode("utf-8"))

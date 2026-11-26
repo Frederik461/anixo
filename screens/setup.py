@@ -154,7 +154,17 @@ class SetupScreen(ShellScreen):
             items.update(self._items_text(index))
 
         status = self._selected_status()
-        installable = bool(status and status.installable and not status.installed)
+        needs_managed_copy = bool(
+            status
+            and status.key == "ani-cli"
+            and status.installed
+            and not status.owned_by_anixo
+        )
+        installable = bool(
+            status
+            and status.installable
+            and (not status.installed or needs_managed_copy)
+        )
         self.query_one("#setup-back", Button).display = index > 0
         self.query_one("#setup-next", Button).display = index < _STEP_COUNT - 1
         self.query_one("#setup-finish", Button).display = index == _STEP_COUNT - 1

@@ -241,7 +241,10 @@ class AnixoApp(App[None]):
         )
         self.artwork = ArtworkService(self.image_cache)
         self.api = AnimeAPI(self.config, self.database)
-        self.ani_cli = AniCliService(self.config)
+        managed_ani_cli_dir = self.platform.managed_ani_cli_dir(
+            self.data_dir, self.cache_dir
+        )
+        self.ani_cli = AniCliService(self.config, managed_dir=managed_ani_cli_dir)
         self.provider = ProviderService(self.ani_cli.provider_base_url())
         self.updates = UpdateService(self.config, data_dir=self.data_dir, adapter=self.platform)
         self.ani_cli_updates = AniCliUpdateService(

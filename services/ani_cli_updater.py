@@ -19,6 +19,7 @@ import re
 import shutil
 import time
 from dataclasses import dataclass
+from urllib.parse import parse_qsl, urlparse
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -35,7 +36,8 @@ from services.ani_cli import (
 )
 from services.dependency_manager import DependencyManager
 from services.install_manifest import COMPONENT_ANI_CLI
-from services.update_log import UpdateLog, redact_update_text
+from services.managed_ani_cli import ManagedAniCli
+from services.update_log import UpdateLog, redact_update_text, redact_update_value
 from services.updater import _version_key, parse_version
 
 # Derived from ANI_CLI_URL = raw.githubusercontent.com/pystardust/ani-cli/v5.1/ani-cli
@@ -57,6 +59,39 @@ def _timestamp() -> str:
 
 def _digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest().upper()
+
+
+_SENSITIVE_QUERY_KEYS = {
+    "sig",
+    "se",
+    "expires",
+    "expiration",
+    "token",
+    "access_token",
+    "refresh_token",
+    "api_key",
+    "apikey",
+    "key",
+    "password",
+    "passwd",
+    "pwd",
+    "secret",
+    "signature",
+}
+
+
+def _clean_https_url(url: str) -> bool:
+    """Accept only HTTPS URLs without userinfo or credential-bearing query keys."""
+    parsed = urlparse(str(url or ""))
+    if parsed.scheme.lower() != "https" or not parsed.netloc:
+        return False
+    if parsed.username or parsed.password or "@" in parsed.netloc:
+        return False
+    for key, _ in parse_qsl(parsed.query, keep_blank_values=True):
+        lowered = key.strip().lower()
+        if lowered in _SENSITIVE_QUERY_KEYS or lowered.startswith("x-amz-"):
+            return False
+    return True
 
 
 def _safe_error(error: BaseException) -> str:
@@ -167,6 +202,11 @@ class AniCliUpdateService:
         self.log = UpdateLog(self.data_dir)
         self._cache_path = self.data_dir / "updates" / "ani-cli-check.json"
 
+    @property
+    def managed(self) -> ManagedAniCli:
+        """The local receipt beside ANIXO's dedicated ani-cli copy."""
+        return self._manager().managed_ani_cli
+
     def _manager(self) -> DependencyManager:
         if self.manager is None:
             cache = (
@@ -186,8 +226,16 @@ class AniCliUpdateService:
         return self.manager
 
     def detect_installed(self) -> AniCliInstalled:
-        """Identify the installed script by digest, never by a guessed command."""
-        path = self.ani_cli.installed_script()
+        """Report the managed copy first; never claim an independent one is owned.
+
+        Ownership comes only from the receipt beside ANIXO's dedicated copy.  A
+        script found through PATH or a user configuration is reported as
+        independent and is never replaced.
+        """
+        state = self.managed.read()
+        managed_path = state.script if state and state.script.exists() else None
+        independent = self.ani_cli.installed_script()
+        path = managed_path or independent
         if not path or not path.exists():
             return AniCliInstalled(
                 "", "not installed", "", "", False, "missing",
@@ -200,13 +248,11 @@ class AniCliUpdateService:
                 str(path), "unreadable", "", "", False, "unreadable", str(error)
             )
         digest = _digest(payload)
-        record = self._manager().manifest.get(COMPONENT_ANI_CLI)
-        owned = bool(record and record.installed_by_anixo and record.managed)
-        version = _KNOWN_REVISIONS.get(digest, "")
-        if not version and record and digest == str(record.observed_sha256).upper():
-            version = record.version or "recorded revision"
-        if not version and record and digest == str(record.expected_sha256).upper():
-            version = record.version or "recorded revision"
+        owned = bool(managed_path and self.managed.is_owner(path))
+        if owned and state is not None:
+            version = state.version or _KNOWN_REVISIONS.get(digest, "")
+        else:
+            version = _KNOWN_REVISIONS.get(digest, "")
         if not version:
             version = f"unknown ({digest[:10]})"
         patch_error = ""
@@ -216,17 +262,20 @@ class AniCliUpdateService:
         except (AniCliPatchError, UnicodeDecodeError, ValueError) as error:
             patch_ok = False
             patch_error = redact_update_text(str(error))
-        if digest in _KNOWN_REVISIONS:
-            health = "verified official revision"
-        elif owned:
+        if owned:
             health = "ANIXO-managed revision"
+        elif digest in _KNOWN_REVISIONS:
+            health = "verified official revision (independent)"
         else:
             health = "user-managed / unverified revision"
         detail = (
             f"Script: {path}\nSHA256: {digest}\n"
             f"Owner: {'ANIXO' if owned else 'user or another installer'}\n"
+            f"Managed directory: {self.managed.directory}\n"
             f"Exact-provider patch: {'compatible' if patch_ok else 'out of date'}"
         )
+        if not owned and independent and independent.exists():
+            detail += "\nThe independent installation is left untouched."
         if patch_error:
             detail += f"\nPatch detail: {patch_error}"
         return AniCliInstalled(
@@ -246,7 +295,10 @@ class AniCliUpdateService:
             temporary = self._cache_path.with_name(
                 f"{self._cache_path.name}.{os.getpid()}.tmp"
             )
-            temporary.write_text(json.dumps(check.to_mapping(), indent=2), encoding="utf-8")
+            payload = redact_update_value(check.to_mapping())
+            if not _clean_https_url(str(payload.get("asset_url") or "")):
+                payload["asset_url"] = ""
+            temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             temporary.replace(self._cache_path)
         except OSError:
             self.log.log("ani_cli_cache_write_failed")
@@ -352,8 +404,8 @@ class AniCliUpdateService:
         if not asset:
             raise ValueError("The ani-cli release has no official `ani-cli` asset.")
         url = str(asset.get("browser_download_url") or "").strip()
-        if not url.startswith("https://"):
-            raise ValueError("The ani-cli asset is not hosted over HTTPS.")
+        if not _clean_https_url(url):
+            raise ValueError("The ani-cli asset URL is not a clean HTTPS URL.")
         digest = str(asset.get("digest") or "").strip()
         if digest.lower().startswith("sha256:"):
             digest = digest.split(":", 1)[1]
@@ -371,23 +423,39 @@ class AniCliUpdateService:
         progress: Any = None,
         should_cancel: Any = None,
     ) -> AniCliUpdateResult:
-        """Download, stage, validate, switch, and verify an ani-cli update."""
+        """Update ANIXO's managed copy, creating it beside any independent one."""
         installed = self.detect_installed()
-        if not installed.installed:
-            return AniCliUpdateResult(False, "ani-cli is not installed.", installed.detail)
-        if not installed.owned_by_anixo:
-            return AniCliUpdateResult(
-                False,
-                "ani-cli was installed by the user or another tool.",
-                "ANIXO will not replace an independently managed script.",
-            )
+        adopted = False
+        if not installed.installed or not installed.owned_by_anixo:
+            ensured = self._manager().ensure_managed_ani_cli()
+            if not ensured.ok:
+                return AniCliUpdateResult(
+                    False,
+                    "Could not create an ANIXO-managed ani-cli installation.",
+                    ensured.detail,
+                )
+            adopted = not installed.owned_by_anixo
+            self.config.ani_cli_path = ensured.install_location
+            installed = self.detect_installed()
+            if not installed.installed or not installed.owned_by_anixo:
+                return AniCliUpdateResult(
+                    False,
+                    "The ANIXO-managed ani-cli copy could not be verified.",
+                    installed.detail,
+                )
+
         check = check or self.check()
         if check.error:
             return AniCliUpdateResult(False, "Update check failed.", check.error)
         if not check.update_available:
             return AniCliUpdateResult(
                 True,
-                "ani-cli is already current.",
+                (
+                    "ANIXO-managed ani-cli is current; the independent installation "
+                    "was left untouched."
+                    if adopted
+                    else "ani-cli is already current."
+                ),
                 installed.detail,
                 version=installed.version,
                 digest=installed.digest,
@@ -399,11 +467,21 @@ class AniCliUpdateService:
         if should_cancel and should_cancel():
             return AniCliUpdateResult(False, "Update cancelled.", "No files were changed.")
 
-        base = self.cache_dir / "updates" / "ani-cli"
+        final_path = Path(installed.path)
+        state = self.managed.read()
+        if state is None or not self.managed.is_owner(final_path):
+            return AniCliUpdateResult(
+                False,
+                "ani-cli ownership could not be verified.",
+                "No script was replaced.",
+            )
+
+        base = self.managed.directory / "updates"
         staging = base / "staging"
         backups = base / "backups"
         stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
         backup = backups / stamp
+        wrapper = final_path.with_suffix(".cmd")
         created: list[Path] = []
         try:
             staging.mkdir(parents=True, exist_ok=True)
@@ -441,24 +519,19 @@ class AniCliUpdateService:
                 ) from error
 
             if progress:
-                progress("Backing up the installed ani-cli script…")
+                progress("Backing up the ANIXO-managed ani-cli copy…")
             backup.mkdir(parents=True, exist_ok=True)
-            original = Path(installed.path)
-            if original.exists():
-                shutil.copy2(original, backup / original.name)
-                created.append(backup / original.name)
-            wrapper = original.with_suffix(".cmd")
-            wrapper_existed = wrapper.exists()
-            if wrapper_existed:
+            shutil.copy2(final_path, backup / final_path.name)
+            if wrapper.exists():
                 shutil.copy2(wrapper, backup / wrapper.name)
-                created.append(backup / wrapper.name)
+            self.managed.backup(backup)
             if should_cancel and should_cancel():
                 raise asyncio.CancelledError("Update cancelled before installation.")
 
             if progress:
                 progress("Installing the staged candidate…")
             final = setup_service.install_verified_ani_cli_payload(
-                self._manager().tools_dir,
+                self.managed.directory,
                 payload,
                 expected_sha256=check.expected_sha256,
                 overwrite=True,
@@ -467,11 +540,13 @@ class AniCliUpdateService:
             )
             if not final.ok:
                 raise ValueError(final.detail or final.message)
-            final_path = Path(final.install_location)
-            if _digest(final_path.read_bytes()) != str(check.expected_sha256).upper():
+            installed_path = Path(final.install_location)
+            if _digest(installed_path.read_bytes()) != str(check.expected_sha256).upper():
                 raise ValueError("Post-install checksum verification failed.")
             try:
-                patch_exact_provider_selection(final_path.read_text(encoding="utf-8"))
+                patch_exact_provider_selection(
+                    installed_path.read_text(encoding="utf-8")
+                )
             except (AniCliPatchError, OSError, UnicodeDecodeError, ValueError) as error:
                 raise AniCliPatchError(
                     "ani-cli patch is out of date for this ani-cli version; "
@@ -480,13 +555,13 @@ class AniCliUpdateService:
             self._manager().record_ani_cli_update(
                 version=check.latest_version,
                 source=check.asset_url,
-                install_location=str(final_path),
+                install_location=str(installed_path),
                 sha256=actual,
-                config_path=str(final_path),
+                config_path=str(installed_path),
             )
             self._write_cache(
                 AniCliUpdateCheck(
-                    installed.version,
+                    state.version or installed.version,
                     check.latest_version,
                     False,
                     _timestamp(),
@@ -496,7 +571,9 @@ class AniCliUpdateService:
                     message=f"ani-cli {check.latest_version} is installed.",
                 )
             )
-            self.log.log("ani_cli_update_succeeded", version=check.latest_version, sha256=actual)
+            self.log.log(
+                "ani_cli_update_succeeded", version=check.latest_version, sha256=actual
+            )
             return AniCliUpdateResult(
                 True,
                 f"ani-cli {check.latest_version} installed and verified.",
@@ -507,24 +584,19 @@ class AniCliUpdateService:
             )
         except (asyncio.CancelledError, ValueError, OSError, httpx.HTTPError) as error:
             detail = _safe_error(error)
-            if any(path.exists() for path in created):
-                for path in created:
-                    if path.is_file() and staging in path.parents:
-                        path.unlink(missing_ok=True)
+            for path in created:
+                if path.is_file() and staging in path.parents:
+                    path.unlink(missing_ok=True)
             if backup.exists():
                 try:
-                    original = Path(installed.path)
-                    restored = next(
-                        (item for item in backup.glob("ani-cli*") if item.name == original.name),
-                        None,
-                    )
-                    if restored:
-                        shutil.copy2(restored, original)
-                    wrapper = original.with_suffix(".cmd")
-                    restored_wrapper = backup / wrapper.name
-                    if restored_wrapper.exists():
-                        shutil.copy2(restored_wrapper, wrapper)
-                    detail += " The previous installation was restored."
+                    previous = backup / final_path.name
+                    if previous.is_file():
+                        shutil.copy2(previous, final_path)
+                    previous_wrapper = backup / wrapper.name
+                    if previous_wrapper.is_file():
+                        shutil.copy2(previous_wrapper, wrapper)
+                    self.managed.restore(backup)
+                    detail += " The previous ANIXO-managed installation was restored."
                 except OSError as restore_error:
                     detail += f" Rollback failed: {restore_error}"
             self.log.log("ani_cli_update_failed", error=detail)
@@ -536,8 +608,8 @@ class AniCliUpdateService:
 
     @staticmethod
     def _download(url: str, should_cancel: Any = None) -> bytes:
-        if not url.startswith("https://"):
-            raise ValueError("Refusing to download ani-cli over an insecure URL.")
+        if not _clean_https_url(url):
+            raise ValueError("Refusing to download ani-cli from an unverified URL.")
         with httpx.Client(
             timeout=60.0,
             follow_redirects=True,

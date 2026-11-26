@@ -8,6 +8,8 @@ from platforms import WINDOWS, PlatformAdapter
 from services import setup as setup_service
 from services.dependency_manager import DependencyManager
 from services.install_manifest import COMPONENT_ANI_CLI, ManifestStore
+from services.managed_ani_cli import ManagedAniCli
+from version import APP_VERSION
 
 
 def _status(key: str = "ani-cli", label: str = "ani-cli") -> setup_service.DependencyStatus:
@@ -41,13 +43,15 @@ def test_install_ani_cli_records_ownership(tmp_path: Path, monkeypatch) -> None:
     manager = DependencyManager(
         config, tmp_path / "data", tmp_path / "cache", PlatformAdapter(WINDOWS)
     )
-    script = manager.tools_dir / "ani-cli"
+    script = manager.managed_ani_cli.script_path
+    payload = b"official bytes"
+    digest = hashlib.sha256(payload).hexdigest().upper()
     seen: dict[str, bool] = {}
 
     def fake_install(destination: Path, *, overwrite: bool = False):
         seen["overwrite"] = overwrite
         destination.mkdir(parents=True, exist_ok=True)
-        script.write_text("official bytes", encoding="utf-8")
+        script.write_bytes(payload)
         return setup_service.InstallResult(
             True,
             "installed",
@@ -55,7 +59,7 @@ def test_install_ani_cli_records_ownership(tmp_path: Path, monkeypatch) -> None:
             source=setup_service.ANI_CLI_URL,
             version="v5.1",
             install_location=str(script),
-            sha256="B" * 64,
+            sha256=digest,
         )
 
     monkeypatch.setattr(setup_service, "install_ani_cli", fake_install)
@@ -87,21 +91,28 @@ def test_existing_unowned_ani_cli_is_not_overwritten(tmp_path: Path, monkeypatch
     assert seen["overwrite"] is False
 
 
-def test_backfill_requires_digest_and_tools_location(tmp_path: Path, monkeypatch) -> None:
+def test_backfill_requires_local_ownership_receipt(tmp_path: Path) -> None:
     data = tmp_path / "data"
     cache = tmp_path / "cache"
-    tools = cache.parent / "tools"
-    tools.mkdir(parents=True)
-    script = tools / "ani-cli"
-    script.write_bytes(b"verified official bytes")
-    digest = hashlib.sha256(b"verified official bytes").hexdigest().upper()
-    monkeypatch.setattr(setup_service, "ANI_CLI_SHA256", digest)
+    managed_root = cache.parent / "ani-cli"
+    script = managed_root / "ani-cli"
+    script.parent.mkdir(parents=True)
+    payload = b"verified official bytes"
+    script.write_bytes(payload)
+    digest = hashlib.sha256(payload).hexdigest().upper()
+    ManagedAniCli(managed_root).record(
+        script=script,
+        sha256=digest,
+        version=APP_VERSION,
+        source="https://example.invalid/managed-ani-cli",
+        install_method="verified-install",
+    )
     config = Config(ani_cli_path=str(script))
     manager = DependencyManager(config, data, cache, PlatformAdapter(WINDOWS))
     assert manager.backfill_from_config() is True
     record = manager.manifest.get(COMPONENT_ANI_CLI)
     assert record is not None
-    assert record.install_method == "backfilled-from-config"
+    assert record.install_method == "receipt-backfill"
     assert manager.backfill_from_config() is False
 
 
@@ -134,13 +145,36 @@ def test_winget_install_is_refused_off_windows(tmp_path: Path, monkeypatch) -> N
     assert called is False
 
 
-def test_update_refuses_unowned_ani_cli(tmp_path: Path) -> None:
+def test_update_creates_managed_ani_cli_without_existing_record(
+    tmp_path: Path, monkeypatch
+) -> None:
     manager = DependencyManager(
         Config(), tmp_path / "data", tmp_path / "cache", PlatformAdapter(WINDOWS)
     )
+    payload = b"managed official bytes"
+    digest = hashlib.sha256(payload).hexdigest().upper()
+
+    def fake_install(destination: Path, *, overwrite: bool = False):
+        assert overwrite is False
+        destination.mkdir(parents=True, exist_ok=True)
+        script = destination / "ani-cli"
+        script.write_bytes(payload)
+        return setup_service.InstallResult(
+            True,
+            "managed copy created",
+            "verified",
+            source="https://example.invalid/managed-ani-cli",
+            version="managed-revision",
+            install_location=str(script),
+            sha256=digest,
+        )
+
+    monkeypatch.setattr(setup_service, "install_ani_cli", fake_install)
     result = manager.update_ani_cli()
-    assert result.ok is False
-    assert "not installed by ANIXO" in result.message
+    assert result.ok is True
+    assert "managed copy created" in result.message
+    assert manager.managed_ani_cli.script_path.read_bytes() == payload
+    assert manager.managed_ani_cli.read() is not None
 
 
 def test_manifest_store_can_be_injected(tmp_path: Path) -> None:

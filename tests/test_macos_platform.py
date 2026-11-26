@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 
@@ -30,6 +31,7 @@ def _clean_environment(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
         "ANIME_HUB_CONFIG",
         "ANIXO_CACHE_DIR",
         "ANIXO_LOG_DIR",
+        "ANIXO_ANI_CLI_DIR",
         "APPDATA",
         "LOCALAPPDATA",
         "XDG_CONFIG_HOME",
@@ -74,12 +76,14 @@ def test_macos_dependency_install_records_macos_ownership(
     data = tmp_path / "data"
     cache = tmp_path / "cache"
     manager = DependencyManager(Config(), data, cache, PlatformAdapter(MACOS))
-    script = manager.tools_dir / "ani-cli"
+    script = manager.managed_ani_cli.script_path
+    payload = b"official bytes"
+    digest = hashlib.sha256(payload).hexdigest().upper()
 
     def fake_install(destination: Path, *, overwrite: bool = False):
         assert overwrite is False
         destination.mkdir(parents=True, exist_ok=True)
-        script.write_text("official bytes", encoding="utf-8")
+        script.write_bytes(payload)
         return setup_service.InstallResult(
             True,
             "installed",
@@ -87,7 +91,7 @@ def test_macos_dependency_install_records_macos_ownership(
             source=setup_service.ANI_CLI_URL,
             version="v5.1",
             install_location=str(script),
-            sha256="B" * 64,
+            sha256=digest,
         )
 
     monkeypatch.setattr(setup_service, "install_ani_cli", fake_install)

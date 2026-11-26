@@ -280,7 +280,12 @@ def main(argv: list[str] | None = None) -> int:
                 data_dir=data_dir,
                 log_dir=default_log_dir(),
                 config=config,
-                ani_cli=AniCliService(config),
+                ani_cli=AniCliService(
+                    config,
+                    managed_dir=get_platform_adapter().managed_ani_cli_dir(
+                        data_dir, cache_root
+                    ),
+                ),
                 capabilities=capabilities,
                 cache_counts=cache_counts,
             ),

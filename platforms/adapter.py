@@ -137,6 +137,21 @@ class PlatformAdapter:
         """ANIXO-private directory for downloaded executables and scripts."""
         return Path(cache_dir).resolve().parent / "tools"
 
+    def managed_ani_cli_dir(self, data_dir: Path, cache_dir: Path) -> Path:
+        """Persistent, dedicated root for ANIXO's own ani-cli copy.
+
+        On Windows this is the sibling of the cache under LOCALAPPDATA, so an
+        ANIXO application update never replaces it.  On other platforms it
+        lives under the persistent application data directory.  An explicit
+        environment override keeps tests and portable layouts deterministic.
+        """
+        override = self._env_path("ANIXO_ANI_CLI_DIR")
+        if override:
+            return override
+        if self.is_windows:
+            return Path(cache_dir).resolve().parent / "ani-cli"
+        return Path(data_dir).resolve() / "ani-cli"
+
     def downloads_dir(self) -> Path:
         return Path.home() / "Downloads"
 

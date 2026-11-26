@@ -27,6 +27,7 @@ from services.ani_cli_updater import (
 )
 from services.dependency_manager import DependencyManager
 from services.install_manifest import COMPONENT_ANI_CLI, InstallRecord, ManifestStore
+from services.managed_ani_cli import ManagedAniCli
 from version import APP_VERSION
 
 
@@ -112,7 +113,22 @@ def _update_service(
     store.save(manifest)
     config = Config()
     config.ani_cli_path = str(script)
-    manager = DependencyManager(config, data, cache, PlatformAdapter(WINDOWS), store)
+    manager = DependencyManager(
+        config,
+        data,
+        cache,
+        PlatformAdapter(WINDOWS),
+        store,
+        managed_ani_cli_dir=script.parent if owned else None,
+    )
+    if owned:
+        ManagedAniCli(script.parent).record(
+            script=script,
+            sha256=digest,
+            version=APP_VERSION,
+            source="https://example.invalid/ani-cli",
+            install_method="pinned-script",
+        )
     return AniCliUpdateService(
         config,
         data,
@@ -256,26 +272,47 @@ def test_no_continue_with_exact_episode_and_no_self_update() -> None:
 # Runtime fail-closed behavior
 
 
-def test_unowned_user_ani_cli_still_refused(tmp_path: Path) -> None:
+def test_unowned_user_ani_cli_is_left_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     source = _source()
     script = tmp_path / "tools" / "ani-cli"
     script.parent.mkdir()
     script.write_bytes(source)
     service = _update_service(tmp_path, script, owned=False, source=source)
-    candidate = _source()
+
+    def fake_install(destination: Path, *, overwrite: bool = False):
+        assert overwrite is False
+        destination.mkdir(parents=True, exist_ok=True)
+        managed = destination / "ani-cli"
+        managed.write_bytes(source)
+        return setup_service.InstallResult(
+            True,
+            "managed copy created",
+            "verified",
+            source="https://example.invalid/managed-ani-cli",
+            version=APP_VERSION,
+            install_location=str(managed),
+            sha256=_sha(source).upper(),
+        )
+
+    monkeypatch.setattr(setup_service, "install_ani_cli", fake_install)
     check = AniCliUpdateCheck(
         APP_VERSION,
-        _higher_version(),
-        True,
+        APP_VERSION,
+        False,
         "2026-11-25T00:00:00+00:00",
         "https://example.invalid/ani-cli",
-        _sha(candidate).upper(),
+        _sha(source).upper(),
         "",
     )
     result = service.update(check)
-    assert result.ok is False
-    assert "another tool" in result.message
+    assert result.ok is True
+    assert "left untouched" in result.message
     assert script.read_bytes() == source
+    managed = service._manager().managed_ani_cli.script_path
+    assert managed.parent != script.parent
+    assert managed.read_bytes() == source
 
 
 def test_runtime_patch_failure_is_typed_and_fails_closed(

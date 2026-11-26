@@ -20,6 +20,7 @@ from config import Config
 from platforms import PlatformAdapter, get_platform_adapter
 from services import setup as setup_service
 from services.ani_cli import _KNOWN_PROVIDER_SHA256
+from services.managed_ani_cli import ManagedAniCli
 from services.install_manifest import (
     COMPONENT_ANI_CLI,
     COMPONENT_APP,
@@ -60,12 +61,19 @@ class DependencyManager:
         cache_dir: Path,
         adapter: PlatformAdapter | None = None,
         store: ManifestStore | None = None,
+        managed_ani_cli_dir: Path | str | None = None,
     ) -> None:
         self.config = config
         self.adapter = adapter or get_platform_adapter()
         self.data_dir = Path(data_dir).resolve()
         self.cache_dir = Path(cache_dir).resolve()
         self.tools_dir = self.adapter.tools_dir(self.cache_dir)
+        self.managed_ani_cli_dir = (
+            Path(managed_ani_cli_dir).resolve()
+            if managed_ani_cli_dir is not None
+            else self.adapter.managed_ani_cli_dir(self.data_dir, self.cache_dir)
+        )
+        self.managed_ani_cli = ManagedAniCli(self.managed_ani_cli_dir)
         self.store = store or ManifestStore(self.data_dir, self.adapter)
         loaded = self.store.load()
         self.manifest = loaded.manifest
@@ -136,6 +144,20 @@ class DependencyManager:
         result = []
         for status in statuses:
             record = self._record_for(status.key)
+            if getattr(status, "key", "") == "ani-cli":
+                state = self.managed_ani_cli.read()
+                owned = bool(state and state.script.exists())
+                result.append(
+                    replace(
+                        status,
+                        owned_by_anixo=owned,
+                        managed=owned,
+                        safe_to_remove=owned,
+                        install_location=str(state.script) if state else "",
+                        source=state.source if state else status.official_url,
+                    )
+                )
+                continue
             if record:
                 result.append(
                     replace(
@@ -202,22 +224,32 @@ class DependencyManager:
         return self._install_winget_dependency(key, status)
 
     def _install_ani_cli(self) -> setup_service.InstallResult:
-        existing = self.manifest.get(COMPONENT_ANI_CLI)
-        overwrite = bool(
-            existing
-            and existing.installed_by_anixo
-            and existing.managed
-            and existing.safe_to_remove
+        """Install into the dedicated, persistent ANIXO-managed directory.
+
+        Overwrite permission comes from the receipt beside that copy.  An
+        independently managed script anywhere else is left untouched; ANIXO
+        simply points its own configuration at the copy it owns.
+        """
+        overwrite = self.managed_ani_cli.is_owner(self.managed_ani_cli.script_path)
+        result = setup_service.install_ani_cli(
+            self.managed_ani_cli_dir, overwrite=overwrite
         )
-        result = setup_service.install_ani_cli(self.tools_dir, overwrite=overwrite)
         if not result.ok:
             return result
 
-        paths = [Path(result.install_location)]
-        wrapper = self.tools_dir / "ani-cli.cmd"
+        script = Path(result.install_location)
+        paths = [script]
+        wrapper = self.managed_ani_cli.wrapper_path
         if wrapper.exists():
             paths.append(wrapper)
-        sha256 = result.sha256 or _digest(paths[0])
+        sha256 = result.sha256 or _digest(script)
+        self.managed_ani_cli.record(
+            script=script,
+            sha256=sha256,
+            version=result.version or "v5.1",
+            source=result.source or setup_service.ANI_CLI_URL,
+            install_method="managed-pinned-script",
+        )
         self.manifest.upsert(
             InstallRecord(
                 key=COMPONENT_ANI_CLI,
@@ -226,11 +258,11 @@ class DependencyManager:
                 installed_by_anixo=True,
                 managed=True,
                 safe_to_remove=True,
-                install_location=str(paths[0].resolve()),
+                install_location=str(script.resolve()),
                 version=result.version or "v5.1",
                 installed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 source=result.source or setup_service.ANI_CLI_URL,
-                install_method="pinned-script",
+                install_method="managed-pinned-script",
                 expected_sha256=setup_service.ANI_CLI_SHA256,
                 observed_sha256=sha256,
                 license="GPL-3.0",
@@ -238,10 +270,25 @@ class DependencyManager:
                 config_keys=("ani_cli_path",),
             )
         )
-        self.config.ani_cli_path = str(paths[0].resolve())
+        self.config.ani_cli_path = str(script.resolve())
         self._save()
         self.sync_generated_artifacts()
         return result
+
+    def ensure_managed_ani_cli(self) -> setup_service.InstallResult:
+        """Return the managed copy, creating it without touching other installs."""
+        state = self.managed_ani_cli.read()
+        if state and state.script.exists() and _digest(state.script) == state.sha256:
+            return setup_service.InstallResult(
+                True,
+                "ani-cli is already ANIXO-managed.",
+                f"Managed directory: {self.managed_ani_cli_dir}",
+                source=state.source,
+                version=state.version,
+                install_location=str(state.script),
+                sha256=state.sha256,
+            )
+        return self._install_ani_cli()
 
     def _winget_installed(self, winget_id: str) -> bool:
         executable = shutil.which("winget")
@@ -332,37 +379,48 @@ class DependencyManager:
     # Safe updates (never ani-cli -U)
 
     def update_ani_cli(self) -> setup_service.InstallResult:
-        record = self.manifest.get(COMPONENT_ANI_CLI)
-        if not record or not record.installed_by_anixo:
+        """Refresh the pinned managed copy without touching an independent one."""
+        existing = self.managed_ani_cli.read()
+        already_managed = bool(
+            existing
+            and existing.script.exists()
+            and _digest(existing.script) == existing.sha256
+        )
+        if not already_managed:
+            return self.ensure_managed_ani_cli()
+        state = self.managed_ani_cli.read()
+        if state is None:
             return setup_service.InstallResult(
                 False,
-                "ani-cli was not installed by ANIXO.",
-                "ANIXO will not replace a script owned by another installer.",
+                "ani-cli ownership could not be verified.",
+                "No script was replaced.",
             )
-        source = Path(record.install_location)
-        if source.exists():
-            backup = source.with_name(
-                f"ani-cli.anixo-backup-{time.strftime('%Y%m%d-%H%M%S')}"
-            )
-            try:
-                shutil.copy2(source, backup)
-            except OSError:
-                pass
-        result = setup_service.install_ani_cli(self.tools_dir, overwrite=True)
+        backup = (
+            self.cache_dir
+            / "updates"
+            / "ani-cli"
+            / "backups"
+            / time.strftime("%Y%m%d-%H%M%S")
+        )
+        try:
+            backup.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(state.script, backup / state.script.name)
+            if state.wrapper.exists():
+                shutil.copy2(state.wrapper, backup / state.wrapper.name)
+            self.managed_ani_cli.backup(backup)
+        except OSError:
+            pass
+        result = setup_service.install_ani_cli(
+            self.managed_ani_cli_dir, overwrite=True
+        )
         if result.ok:
-            self.manifest.upsert(
-                replace(
-                    record,
-                    version=result.version or record.version,
-                    source=result.source or record.source,
-                    expected_sha256=setup_service.ANI_CLI_SHA256,
-                    observed_sha256=result.sha256 or _digest(Path(result.install_location)),
-                    installed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                )
+            self.record_ani_cli_update(
+                version=result.version or state.version,
+                source=result.source or state.source,
+                install_location=str(result.install_location),
+                sha256=result.sha256 or _digest(Path(result.install_location)),
+                config_path=str(result.install_location),
             )
-            self.config.ani_cli_path = result.install_location
-            self._save()
-            self.sync_generated_artifacts()
         return result
 
     def record_ani_cli_update(
@@ -374,22 +432,49 @@ class DependencyManager:
         sha256: str,
         config_path: str = "",
     ) -> InstallRecord:
-        """Record a completed safe ani-cli update in the ownership manifest."""
-        record = self.manifest.get(COMPONENT_ANI_CLI)
-        if not record or not record.installed_by_anixo:
+        """Record a completed safe update in both the local receipt and manifest."""
+        state = self.managed_ani_cli.read()
+        if state is None or not self.managed_ani_cli.is_owner(install_location):
             raise ValueError("ani-cli is not ANIXO-managed; refusing to record an update.")
+        record = self.manifest.get(COMPONENT_ANI_CLI)
+        method = record.install_method if record else "managed-verified-update"
         updated = replace(
             record,
             version=str(version),
             source=str(source),
-            install_location=str(install_location),
+            install_location=str(state.script),
             expected_sha256=str(sha256).upper(),
             observed_sha256=str(sha256).upper(),
             installed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            install_method=record.install_method or "pinned-script",
-            paths=tuple(
-                path for path in (str(install_location),) if path
-            ),
+            install_method=method or "managed-verified-update",
+            installed_by_anixo=True,
+            managed=True,
+            safe_to_remove=True,
+            paths=tuple(path for path in (str(state.script),) if path),
+        ) if record else InstallRecord(
+            key=COMPONENT_ANI_CLI,
+            name="ani-cli",
+            platform=self.adapter.id,
+            installed_by_anixo=True,
+            managed=True,
+            safe_to_remove=True,
+            install_location=str(state.script),
+            version=str(version),
+            installed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            source=str(source),
+            install_method="managed-verified-update",
+            expected_sha256=str(sha256).upper(),
+            observed_sha256=str(sha256).upper(),
+            license="GPL-3.0",
+            paths=(str(state.script),),
+            config_keys=("ani_cli_path",),
+        )
+        self.managed_ani_cli.record(
+            script=state.script,
+            sha256=sha256,
+            version=version,
+            source=source,
+            install_method=method or "managed-verified-update",
         )
         self.manifest.upsert(updated)
         if config_path:
@@ -402,14 +487,22 @@ class DependencyManager:
     # Backfill for installs from older ANIXO builds
 
     def backfill_from_config(self) -> bool:
+        """Rebuild a manifest record only from the local ownership receipt.
+
+        Paths, pinned digests, timestamps, and ANIXO release names are never
+        treated as proof of ownership.  A script without a receipt is left
+        independently managed; the updater creates a separate managed copy.
+        """
         if self.manifest.get(COMPONENT_ANI_CLI) or not self.config.ani_cli_path:
             return False
-        path = Path(self.config.ani_cli_path).expanduser().resolve()
-        tools = self.tools_dir.resolve()
-        if tools not in path.parents or not path.exists():
+        state = self.managed_ani_cli.read()
+        if state is None or not state.script.exists():
             return False
-        digest = _digest(path)
-        if digest != setup_service.ANI_CLI_SHA256:
+        try:
+            configured = Path(self.config.ani_cli_path).expanduser().resolve()
+        except (OSError, RuntimeError):
+            return False
+        if configured != state.script or _digest(state.script) != state.sha256:
             return False
         self.manifest.upsert(
             InstallRecord(
@@ -419,16 +512,16 @@ class DependencyManager:
                 installed_by_anixo=True,
                 managed=True,
                 safe_to_remove=True,
-                install_location=str(path),
-                version="v5.1",
+                install_location=str(state.script),
+                version=state.version or "recorded revision",
                 installed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                source=setup_service.ANI_CLI_URL,
-                install_method="backfilled-from-config",
-                expected_sha256=setup_service.ANI_CLI_SHA256,
-                observed_sha256=digest,
-                paths=(str(path),),
+                source=state.source or setup_service.ANI_CLI_URL,
+                install_method="receipt-backfill",
+                expected_sha256=state.sha256,
+                observed_sha256=state.sha256,
+                paths=(str(state.script),),
                 config_keys=("ani_cli_path",),
-                notes="Ownership inferred from ANIXO's tools directory and official digest.",
+                notes="Ownership read from the receipt beside ANIXO's managed copy.",
             )
         )
         self._save()

@@ -33,6 +33,7 @@ from services.install_manifest import (
     InstallRecord,
     ManifestStore,
 )
+from services.managed_ani_cli import ManagedAniCli
 from services.updater import (
     ReleaseAsset,
     ReleaseInfo,
@@ -239,14 +240,30 @@ def _ani_cli_service(
     data = tmp_path / "data"
     cache = tmp_path / "cache"
     digest = _sha(script.read_bytes()).upper()
+    record = _ani_cli_record(script, digest, owned=owned)
     store = ManifestStore(data, PlatformAdapter(WINDOWS))
     manifest = store.new_manifest("windows-installer")
-    manifest.upsert(_ani_cli_record(script, digest, owned=owned))
+    manifest.upsert(record)
     store.save(manifest)
     config = Config()
     config.ani_cli_path = str(script)
     config.preferred_audio = "dub"
-    manager = DependencyManager(config, data, cache, PlatformAdapter(WINDOWS), store)
+    manager = DependencyManager(
+        config,
+        data,
+        cache,
+        PlatformAdapter(WINDOWS),
+        store,
+        managed_ani_cli_dir=script.parent if owned else None,
+    )
+    if owned:
+        ManagedAniCli(script.parent).record(
+            script=script,
+            sha256=digest,
+            version=record.version,
+            source=record.source,
+            install_method=record.install_method,
+        )
     return AniCliUpdateService(
         config,
         data,
@@ -750,19 +767,42 @@ def test_ani_cli_release_parser_requires_asset_and_digest(tmp_path: Path) -> Non
         )
 
 
-def test_ani_cli_update_refuses_user_managed_installation(tmp_path: Path) -> None:
+def test_ani_cli_update_leaves_user_managed_installation_untouched(
+    tmp_path: Path, monkeypatch
+) -> None:
     script = tmp_path / "tools" / "ani-cli"
     script.parent.mkdir(parents=True)
     original = _ani_cli_source()
     script.write_bytes(original)
     service = _ani_cli_service(tmp_path, script, owned=False)
+
+    def fake_install(destination: Path, *, overwrite: bool = False):
+        assert overwrite is False
+        destination.mkdir(parents=True, exist_ok=True)
+        managed = destination / "ani-cli"
+        managed.write_bytes(original)
+        return setup_service.InstallResult(
+            True,
+            "installed",
+            "verified",
+            source="https://example.invalid/managed-ani-cli",
+            version="managed-revision",
+            install_location=str(managed),
+            sha256=_sha(original).upper(),
+        )
+
+    monkeypatch.setattr(setup_service, "install_ani_cli", fake_install)
     check = AniCliUpdateCheck(
-        "v5.1", "v9.9.9", True, "2026-11-25", "https://example.test/ani-cli", "B" * 64, ""
+        "v5.1", "v9.9.9", False, "2026-11-25", "https://example.test/ani-cli", "B" * 64, ""
     )
     result = service.update(check)
-    assert result.ok is False
-    assert "another tool" in result.message
+    assert result.ok is True
+    assert "left untouched" in result.message
     assert script.read_bytes() == original
+    managed_script = service._manager().managed_ani_cli.script_path
+    assert managed_script.parent != script.parent
+    assert managed_script.read_bytes() == original
+    assert service.config.ani_cli_path == str(managed_script)
 
 
 def test_ani_cli_update_stages_verifies_and_records(tmp_path: Path, monkeypatch) -> None:

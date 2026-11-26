@@ -203,6 +203,7 @@ class UninstallPlanner:
             return True
         managed = (
             self.adapter.tools_dir(self.cache_dir),
+            self.adapter.managed_ani_cli_dir(self.data_dir, self.cache_dir),
             self.cache_dir / "runtime",
             self.data_dir,
             self.cache_dir,

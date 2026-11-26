@@ -15,6 +15,7 @@ def _clean_environment(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
         "ANIME_HUB_CONFIG",
         "ANIXO_CACHE_DIR",
         "ANIXO_LOG_DIR",
+        "ANIXO_ANI_CLI_DIR",
         "APPDATA",
         "LOCALAPPDATA",
         "GIT_INSTALL_ROOT",
