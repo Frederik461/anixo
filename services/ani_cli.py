@@ -42,11 +42,12 @@ _EXACT_FILTER = r'''        # ANIXO exact provider selection: keep only the ID c
             [ -n "$anime_list" ] || die "Selected provider result is no longer available"
         fi
 '''
-# ani-cli 5.2 emits ``AniListID:siteID:`` result keys.  ANIXO stores that whole
-# key as the provider row ID, so the filter stays an exact equality check.
+# ani-cli 5.2 emits ``AniListID:siteID:MALID`` result keys.  ANIXO stores that
+# whole key. A legacy ``AniListID:siteID:`` ID still identifies the same exact
+# provider result, so both forms are accepted; nothing is ever guess-matched.
 _EXACT_FILTER_V2 = r'''        # ANIXO exact provider selection: keep only the exact ID chosen in ANIXO.
          if [ -n "$ANI_CLI_PROVIDER_ID" ]; then
-             anime_list="$(printf "%s\n" "$anime_list" | awk -F '\t' -v id="$ANI_CLI_PROVIDER_ID" '$1 == id { print; exit }')"
+             anime_list="$(printf "%s\n" "$anime_list" | awk -F '\t' -v id="$ANI_CLI_PROVIDER_ID" '{ split($1, part, ":"); if ($1 == id || part[1] ":" part[2] ":" == id) { print; exit } }')"
              [ -n "$anime_list" ] || die "Selected provider result is no longer available"
          fi
 '''
@@ -98,7 +99,7 @@ def patch_exact_provider_selection(source: str) -> str:
 
 
 def _uses_composite_provider_ids(source: str) -> bool:
-    """True when this script emits ``AniListID:siteID:`` result keys."""
+    """True when this script emits ``AniListID:siteID:MALID`` result keys."""
     return _SEARCH_ANCHOR_V2 in source or "miruro_search()" in source
 
 
@@ -645,7 +646,7 @@ class AniCliService:
                     script_text = ""
                 composite = _uses_composite_provider_ids(script_text)
             # The provider row ID is exact for both layouts: a HiAnime slug or a
-            # composite AniListID:siteID: key.  Never weaken it to a title match.
+            # composite AniListID:siteID:MALID key.  Never weaken it to a title match.
             environment["ANI_CLI_PROVIDER_ID"] = provider_id
             if composite:
                 # ANIXO's ID filter is authoritative; title matching stays off.

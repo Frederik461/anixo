@@ -35,14 +35,16 @@ class _Client:
 
 
 def _search_page() -> str:
-    return """<script>items:[{id:"siteA",external_ids:{anilist:["21"],mal:["21"]},title:{romaji:"First",english:"First English",native:"原生"},format:"TV",episode_counts:{raw:12,sub:12,dub:11},description:"A test show.",cover_url:"https://example.invalid/poster.jpg"},{id:"siteB",external_ids:{anilist:["22"]},title:{romaji:"Second",english:"Second English"},format:"MOVIE",episode_count:1}],entityItems:[]</script>"""
+    return """<script>items:[{id:"siteA",external_ids:{anilist:["21"],mal:["50410"]},title:{romaji:"First",english:"First English",native:"原生"},format:"TV",episode_counts:{raw:12,sub:12,dub:11},description:"A test show.",cover_url:"https://example.invalid/poster.jpg"},{id:"siteB",external_ids:{anilist:["22"]},title:{romaji:"Second",english:"Second English"},format:"MOVIE",episode_count:1}],entityItems:[]</script>"""
 
 
 def test_parse_miruro_search_page_keeps_exact_composite_ids() -> None:
     rows = parse_miruro_search_page(_search_page())
 
+    # ani-cli 5.2 keys are AniListID:siteID:MALID; the MAL ID must be present
+    # even when it differs from the AniList ID, and empty when unadvertised.
     assert [(row.source_id, row.title, row.numeric_id) for row in rows] == [
-        ("21:siteA:", "First English", "21"),
+        ("21:siteA:50410", "First English", "21"),
         ("22:siteB:", "Second English", "22"),
     ]
     assert rows[0].format == "TV"
@@ -75,8 +77,8 @@ def test_provider_service_follows_updated_miruro_url() -> None:
     )
 
     rows = service.search("one piece")
-    episodes = service.episodes("21:siteA:")
+    episodes = service.episodes("21:siteA:50410")
 
     assert client.urls == [search_url, watch_url]
-    assert rows[0].source_id == "21:siteA:"
+    assert rows[0].source_id == "21:siteA:50410"
     assert [item.number for item in episodes] == ["1", "2"]

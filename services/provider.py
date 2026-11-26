@@ -132,6 +132,11 @@ def parse_miruro_search_page(page: str) -> list[ProviderAnime]:
         al_id = str(anilist.group(1)).strip()
         if not al_id.isdigit():
             continue
+        # ani-cli 5.2 emits AniListID:siteID:MALID. The trailing MAL ID is
+        # required: the exact-ID filter compares the whole key, and
+        # miruro_media() reads the MAL ID from the third field.
+        mal = re.search(r'\bmal:\["([^"]+)"\]', block)
+        mal_id = str(mal.group(1)).strip() if mal else ""
         title_block = re.search(r"title:\{(.*?)\}", block, re.DOTALL)
         title = ""
         if title_block:
@@ -167,7 +172,7 @@ def parse_miruro_search_page(page: str) -> list[ProviderAnime]:
             metadata["poster_url"] = poster
         results.append(
             ProviderAnime(
-                source_id=f"{al_id}:{site_id}:",
+                source_id=f"{al_id}:{site_id}:{mal_id}",
                 title=title,
                 numeric_id=al_id,
                 metadata=metadata,

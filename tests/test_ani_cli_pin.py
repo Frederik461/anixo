@@ -68,7 +68,7 @@ def _source(*, drift: bool = False) -> bytes:
 
 
 def _source_composite(*, drift: bool = False) -> bytes:
-    """Synthetic official layout whose result keys are AniListID:siteID:."""
+    """Synthetic official layout whose result keys are AniListID:siteID:MALID."""
     search = ani_cli_module._SEARCH_ANCHOR_V2
     if drift:
         search = search.replace("anime_list", "drifted_list")
@@ -208,6 +208,9 @@ def test_composite_layout_patch_is_exact_and_layout_specific() -> None:
         in patched
     )
     assert "$1 == id" in patched
+    # Accept the legacy AniListID:siteID: key stored by earlier ANIXO scans,
+    # but only as the same exact AniList+site pair, never a title guess.
+    assert 'part[1] ":" part[2] ":" == id' in patched
     assert "split($1, parts," not in patched
     assert "hianime_search" not in patched
     assert ani_cli_module._SEARCH_ANCHOR not in patched
@@ -236,7 +239,7 @@ def test_composite_environment_uses_exact_provider_id(tmp_path: Path) -> None:
     invocation = AniCliInvocation("direct", "ani-cli", (), str(script))
     numeric = re.match(r"^v?\d+\.\d+\.(\d+)", APP_VERSION)
     assert numeric is not None
-    exact_id = f"{numeric.group(1)}:site-{numeric.group(1)}:"
+    exact_id = f"{numeric.group(1)}:site-{numeric.group(1)}:{numeric.group(1)}"
 
     environment = service._environment(invocation, provider_id=exact_id)
     assert environment["ANI_CLI_PROVIDER_ID"] == exact_id
