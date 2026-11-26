@@ -131,6 +131,29 @@ def provider_family_from_source(source: str) -> str:
     return ""
 
 
+def sync_provider_url_from_script(
+    config: Config, script: Path | None
+) -> tuple[str, str, bool] | None:
+    """Persist the provider declared by *script* into *config*.
+
+    Returns ``(url, family, config_changed)``. An unreadable or unrecognised
+    script fails closed and returns ``None`` without changing persisted state.
+    """
+    if not script or not script.exists():
+        return None
+    try:
+        source = script.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    url = provider_base_url_from_source(source)
+    if not url:
+        return None
+    changed = config.ani_cli_base_url.rstrip("/") != url
+    if changed:
+        config.ani_cli_base_url = url
+    return url, provider_family_from_source(source) or "hianime", changed
+
+
 @dataclass(frozen=True, slots=True)
 class AniCliRecord:
     episode: str
@@ -552,6 +575,23 @@ class AniCliService:
                 declared = ""
         self._provider_family = declared or "hianime"
         return self._provider_family
+
+    def sync_provider_url(self, script: Path | None = None) -> bool:
+        """Adopt the provider declared by the installed ani-cli revision.
+
+        The installed script is authoritative, so this runs at startup and is
+        never gated on a network update check. Returns ``True`` only when the
+        persisted config actually changed.
+        """
+        result = sync_provider_url_from_script(
+            self.config, script or self.installed_script()
+        )
+        if not result:
+            return False
+        url, family, changed = result
+        self._provider_url = url
+        self._provider_family = family
+        return changed
 
     async def resolve_source_title(self, source_id: str) -> str | None:
         numeric = re.search(r"(\d+)$", source_id)

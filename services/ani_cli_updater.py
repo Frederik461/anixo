@@ -33,8 +33,7 @@ from services.ani_cli import (
     AniCliPatchError,
     AniCliService,
     patch_exact_provider_selection,
-    provider_base_url_from_source,
-    provider_family_from_source,
+    sync_provider_url_from_script,
 )
 from services.dependency_manager import DependencyManager
 from services.install_manifest import COMPONENT_ANI_CLI
@@ -231,25 +230,17 @@ class AniCliUpdateService:
 
     def _sync_provider_url(self, script: Path | None = None) -> bool:
         """Follow the provider URL declared by the installed ani-cli revision."""
-        source_path = script or self.ani_cli.installed_script()
-        if not source_path or not source_path.exists():
-            return False
-        try:
-            source = source_path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return False
-        url = provider_base_url_from_source(source)
-        if not url:
-            return False
-        self.ani_cli._provider_url = url
-        self.ani_cli._provider_family = (
-            provider_family_from_source(source) or "hianime"
+        result = sync_provider_url_from_script(
+            self.config, script or self.ani_cli.installed_script()
         )
-        if self.config.ani_cli_base_url.rstrip("/") == url:
+        if not result:
             return False
-        self.config.ani_cli_base_url = url
-        self.log.log("ani_cli_provider_url_synced", source=url)
-        return True
+        url, family, changed = result
+        self.ani_cli._provider_url = url
+        self.ani_cli._provider_family = family
+        if changed:
+            self.log.log("ani_cli_provider_url_synced", source=url)
+        return changed
 
     def detect_installed(self) -> AniCliInstalled:
         """Report the managed copy first; never claim an independent one is owned.

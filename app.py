@@ -245,6 +245,10 @@ class AnixoApp(App[None]):
             self.data_dir, self.cache_dir
         )
         self.ani_cli = AniCliService(self.config, managed_dir=managed_ani_cli_dir)
+        # The installed script is authoritative. Adopt its provider before any
+        # UI renders so Settings and playback never show a stale provider URL.
+        if self.ani_cli.sync_provider_url():
+            self.config_store.save(self.config)
         self.provider = ProviderService(
             self.ani_cli.provider_base_url(), kind=self.ani_cli.provider_family()
         )

@@ -27,6 +27,27 @@ def test_update_action_is_awaitable(tmp_path: Path) -> None:
     assert inspect.iscoroutinefunction(app.action_update_anixo)
 
 
+def test_provider_url_is_synced_at_startup(tmp_path: Path) -> None:
+    """Settings reads config directly, so the installed script must win at startup."""
+    script = tmp_path / "declared-ani-cli"
+    script.write_text(
+        '#!/usr/bin/env bash\nmiruro_base="https://miruro.invalid"\n',
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    config = Config(
+        images="off",
+        artwork_renderer="off",
+        ani_cli_path=str(script),
+        ani_cli_base_url="https://hianime.invalid",
+    )
+    app = AnixoApp(config=config, data_dir=tmp_path / "data")
+
+    assert config.ani_cli_base_url == "https://miruro.invalid"
+    assert app.provider.base_url == "https://miruro.invalid"
+    assert app.provider.kind == "miruro"
+
+
 def test_dashboard_startup_and_rapid_navigation(tmp_path: Path) -> None:
     history = tmp_path / "empty-ani-hsts"
     history.write_text("", encoding="utf-8")

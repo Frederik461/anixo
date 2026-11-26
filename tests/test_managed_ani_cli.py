@@ -396,6 +396,35 @@ def test_update_syncs_provider_url_from_candidate(
     assert state.script.read_bytes() == candidate
 
 
+def test_sync_provider_url_persists_without_an_update_check(tmp_path: Path) -> None:
+    managed_root = tmp_path / "persistent" / "ani-cli"
+    config, _, _ = _manager(tmp_path, managed_root)
+    script = tmp_path / "declared-ani-cli"
+    script.write_bytes(_source_miruro(APP_VERSION))
+    ani_cli = AniCliService(config, managed_dir=managed_root)
+    before = config.ani_cli_base_url
+
+    assert before != "https://example.invalid/miruro"
+    assert ani_cli.sync_provider_url(script) is True
+    assert config.ani_cli_base_url == "https://example.invalid/miruro"
+    assert ani_cli.provider_base_url() == "https://example.invalid/miruro"
+    assert ani_cli.provider_family() == "miruro"
+    # A second sync must not report another change.
+    assert ani_cli.sync_provider_url(script) is False
+
+
+def test_sync_provider_url_fails_closed_for_unrecognised_source(tmp_path: Path) -> None:
+    managed_root = tmp_path / "persistent" / "ani-cli"
+    config, _, _ = _manager(tmp_path, managed_root)
+    script = tmp_path / "unknown-ani-cli"
+    script.write_bytes(b"#!/bin/sh\n# no provider declaration\n" + b"x" * 5000)
+    ani_cli = AniCliService(config, managed_dir=managed_root)
+    before = config.ani_cli_base_url
+
+    assert ani_cli.sync_provider_url(script) is False
+    assert config.ani_cli_base_url == before
+
+
 # ---------------------------------------------------------------------------
 # 5. No update available
 # ---------------------------------------------------------------------------
