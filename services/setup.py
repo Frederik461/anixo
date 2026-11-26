@@ -505,9 +505,16 @@ def _looks_like_ani_cli(payload: bytes) -> bool:
     if len(payload) < 4000:
         return False
     head = payload[:512].lstrip()
-    return head.startswith(b"#!/") and (
-        b"hianime_search" in payload or b"base_api=" in payload
+    if not head.startswith(b"#!/"):
+        return False
+    legacy = b"hianime_search" in payload or b"base_api=" in payload
+    composite = (
+        b"miruro_search()" in payload
+        and b"miruro_episodes()" in payload
+        and b"version_number=" in payload
+        and b"ANI_CLI_EXACT" in payload
     )
+    return legacy or composite
 
 
 def install_verified_ani_cli_payload(

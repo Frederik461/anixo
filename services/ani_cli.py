@@ -29,15 +29,26 @@ _DEFAULT_PROVIDER = "https://hianime.at"
 _KNOWN_PROVIDER_SHA256 = {
     "F99A1DAC807004BECFB732A5518A0F2DED9DC08B467805ABD03DF5D580BECD46",
     "A87F4B0EB178ED5B7856F93670015B2BA8832F1A9E634AD608967535364E77D9",
+    "60F10C12F2397811D137A76156555803D0913985FE73499DAFDA1A84771FE917",
 }
 _EXACT_MARKER = "# ANIXO exact provider selection"
 _SEARCH_ANCHOR = '        anime_list=$(hianime_search "$query") || exit 1\n'
+_SEARCH_ANCHOR_V2 = '        anime_list=$(miruro_search "$query") || exit 1\n'
 _MENU_ANCHOR = 'dep_ch "$menu_program" # TODO: use dep_ch_failover to iterate through options\n'
 _EXACT_FILTER = r'''        # ANIXO exact provider selection: keep only the ID chosen in ANIXO.
         if [ -n "$ANI_CLI_PROVIDER_ID" ]; then
             anime_list="$(printf "%s\n" "$anime_list" | awk -F '\t' -v id="$ANI_CLI_PROVIDER_ID" '$1 == id { print; exit }')"
             [ -n "$anime_list" ] || die "Selected provider result is no longer available"
         fi
+'''
+# ani-cli 5.2 emits ``AniListID:siteID:`` result keys.  ANIXO's authoritative
+# provider row carries the same AniList ID as the trailing numeric part of its
+# source ID, so matching the first colon-delimited field stays an exact check.
+_EXACT_FILTER_V2 = r'''        # ANIXO exact provider selection: keep only the AniList ID chosen in ANIXO.
+         if [ -n "$ANI_CLI_PROVIDER_ID" ]; then
+             anime_list="$(printf "%s\n" "$anime_list" | awk -F '\t' -v id="$ANI_CLI_PROVIDER_ID" '{ split($1, parts, ":"); if (parts[1] == id) { print; exit } }')"
+             [ -n "$anime_list" ] || die "Selected provider result is no longer available"
+         fi
 '''
 _MENU_REPLACEMENT = (
     "# ANIXO: exact playback needs no interactive menu.\n"
@@ -64,13 +75,18 @@ def patch_exact_provider_selection(source: str) -> str:
     """Apply the tiny exact-ID patch to a verified official ani-cli script."""
     source = source.replace("\r\n", "\n").replace("\r", "\n")
     missing: list[str] = []
-    if _SEARCH_ANCHOR not in source:
+    if _SEARCH_ANCHOR in source:
+        anchor, exact_filter = _SEARCH_ANCHOR, _EXACT_FILTER
+    elif _SEARCH_ANCHOR_V2 in source:
+        anchor, exact_filter = _SEARCH_ANCHOR_V2, _EXACT_FILTER_V2
+    else:
         missing.append("search anchor")
+        anchor, exact_filter = "", ""
     if _MENU_ANCHOR not in source:
         missing.append("menu anchor")
     if missing:
         raise AniCliPatchError(missing_anchors=tuple(missing))
-    patched = source.replace(_SEARCH_ANCHOR, _SEARCH_ANCHOR + _EXACT_FILTER, 1)
+    patched = source.replace(anchor, anchor + exact_filter, 1)
     patched = patched.replace(_MENU_ANCHOR, _MENU_REPLACEMENT, 1)
     if _EXACT_MARKER not in patched:
         raise AniCliPatchError(
@@ -79,6 +95,17 @@ def patch_exact_provider_selection(source: str) -> str:
             missing_anchors=("exact marker",),
         )
     return patched
+
+
+def _uses_composite_provider_ids(source: str) -> bool:
+    """True when this script emits ``AniListID:siteID:`` result keys."""
+    return _SEARCH_ANCHOR_V2 in source or "miruro_search()" in source
+
+
+def _anilist_id(provider_id: str) -> str:
+    """Return the exact AniList ID carried by an ANIXO provider row."""
+    match = re.search(r"(\d+)$", provider_id.strip())
+    return match.group(1) if match else ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -531,7 +558,21 @@ class AniCliService:
                 else player
             )
         if provider_id:
-            environment["ANI_CLI_PROVIDER_ID"] = provider_id
+            effective_provider_id = provider_id
+            composite = False
+            script = self.installed_script()
+            if script:
+                try:
+                    script_text = script.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    script_text = ""
+                composite = _uses_composite_provider_ids(script_text)
+                if composite:
+                    effective_provider_id = _anilist_id(provider_id)
+            environment["ANI_CLI_PROVIDER_ID"] = effective_provider_id
+            if composite:
+                # ANIXO's ID filter is authoritative; title matching stays off.
+                environment["ANI_CLI_EXACT"] = "0"
             environment["ANI_CLI_MENU"] = "false"
             environment["ANI_CLI_NO_DETACH"] = "1"
         return environment

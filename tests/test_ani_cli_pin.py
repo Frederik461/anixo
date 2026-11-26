@@ -67,6 +67,23 @@ def _source(*, drift: bool = False) -> bytes:
     )
 
 
+def _source_composite(*, drift: bool = False) -> bytes:
+    """Synthetic official layout whose result keys are AniListID:siteID:."""
+    search = ani_cli_module._SEARCH_ANCHOR_V2
+    if drift:
+        search = search.replace("anime_list", "drifted_list")
+    head = (
+        f"#!/usr/bin/env bash\n# ani-cli {APP_VERSION}\n"
+        "version_number=synthetic\n"
+        "miruro_search() { :; }\n"
+        "miruro_episodes() { :; }\n"
+        "ANI_CLI_EXACT=0\n"
+    ).encode("utf-8")
+    return head + (search + ani_cli_module._MENU_ANCHOR).encode("utf-8") + (
+        b"\n" + b"# padding line\n" * 400
+    )
+
+
 def _statuses(report: Any) -> dict[str, str]:
     return {item.name: item.status for item in report.checks}
 
@@ -178,6 +195,66 @@ def test_patch_applies_to_copy_only(tmp_path: Path) -> None:
     assert ani_cli_module._EXACT_MARKER in (
         stage / "ani-cli-patched"
     ).read_text(encoding="utf-8")
+
+
+def test_composite_layout_patch_is_exact_and_layout_specific() -> None:
+    source = _source_composite()
+    patched = ani_cli_module.patch_exact_provider_selection(
+        source.decode("utf-8")
+    )
+    assert ani_cli_module._EXACT_MARKER in patched
+    assert (
+        ani_cli_module._SEARCH_ANCHOR_V2 + ani_cli_module._EXACT_FILTER_V2
+        in patched
+    )
+    assert "split($1, parts," in patched
+    assert "parts[1] == id" in patched
+    assert "hianime_search" not in patched
+    assert ani_cli_module._SEARCH_ANCHOR not in patched
+
+
+def test_composite_layout_drift_is_rejected() -> None:
+    source = _source_composite(drift=True)
+    with pytest.raises(AniCliPatchError, match="out of date"):
+        ani_cli_module.patch_exact_provider_selection(source.decode("utf-8"))
+
+
+def test_structural_validation_accepts_only_known_layouts() -> None:
+    assert setup_service._looks_like_ani_cli(_source()) is True
+    assert setup_service._looks_like_ani_cli(_source_composite()) is True
+    assert setup_service._looks_like_ani_cli(b"#!/bin/sh\n" + b"x" * 5000) is False
+
+
+def test_composite_environment_uses_exact_anilist_id(tmp_path: Path) -> None:
+    script = tmp_path / "managed" / "ani-cli"
+    script.parent.mkdir()
+    script.write_bytes(_source_composite())
+    service = AniCliService(
+        Config(ani_cli_path=str(script), ani_cli_base_url="https://example.invalid")
+    )
+    service.supports_exit_after_play = lambda: False  # type: ignore[method-assign]
+    invocation = AniCliInvocation("direct", "ani-cli", (), str(script))
+    numeric = re.match(r"^v?\d+\.\d+\.(\d+)", APP_VERSION)
+    assert numeric is not None
+
+    environment = service._environment(
+        invocation, provider_id=f"series-name-{numeric.group(1)}"
+    )
+    assert environment["ANI_CLI_PROVIDER_ID"] == numeric.group(1)
+    assert environment["ANI_CLI_EXACT"] == "0"
+    assert environment["ANI_CLI_MENU"] == "false"
+
+    refusing = service._environment(invocation, provider_id="no-numeric-id")
+    assert refusing["ANI_CLI_PROVIDER_ID"] == ""
+
+
+def test_pin_checker_accepts_composite_layout() -> None:
+    source = _source_composite()
+    report = pin.run_check(source, expected_sha256=_sha(source))
+    assert report.ok is True, "\n".join(report.lines())
+    statuses = _statuses(report)
+    assert statuses["patch.search_anchor"] == "PASSED"
+    assert statuses["patch.menu_anchor"] == "PASSED"
 
 
 def test_url_candidate_uses_injected_fetcher_only() -> None:

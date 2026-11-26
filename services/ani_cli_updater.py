@@ -50,6 +50,8 @@ _KNOWN_REVISIONS: dict[str, str] = {
     setup_service.ANI_CLI_SHA256.upper(): "v5.1",
     # Official v5.1.8 master revision previously shipped on this machine.
     "A87F4B0EB178ED5B7856F93670015B2BA8832F1A9E634AD608967535364E77D9": "v5.1.8-master",
+    # Official release that uses composite AniList:site search result keys.
+    "60F10C12F2397811D137A76156555803D0913985FE73499DAFDA1A84771FE917": "v5.2",
 }
 
 

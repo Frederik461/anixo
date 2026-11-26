@@ -285,11 +285,15 @@ def run_check(
         staged.write_bytes(candidate)
         # Read the staged copy; the original path is never modified.
         text = staged.read_text(encoding="utf-8")
+        search_anchor_ok = (
+            ani_cli_module._SEARCH_ANCHOR in text
+            or ani_cli_module._SEARCH_ANCHOR_V2 in text
+        )
         checks.append(
             _check(
                 "patch.search_anchor",
-                ani_cli_module._SEARCH_ANCHOR in text,
-                "search anchor present" if ani_cli_module._SEARCH_ANCHOR in text else "search anchor missing",
+                search_anchor_ok,
+                "search anchor present" if search_anchor_ok else "search anchor missing",
             )
         )
         checks.append(
