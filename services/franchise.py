@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
-from models.anime import normalize_title
+from models.anime import Anime, normalize_title
 from services.provider import ProviderAnime
 
 _ROMAN = {
@@ -90,6 +90,36 @@ def group_franchises(results: Iterable[ProviderAnime]) -> list[Franchise]:
         label = min((entry.title for entry in entries), key=len)
         franchises.append(Franchise(key, label, tuple(entries)))
     return franchises
+
+
+def filter_for_anime(results: Iterable[ProviderAnime], anime: Anime) -> list[ProviderAnime]:
+    """Keep only provider rows belonging to *anime* or its franchise.
+
+    Provider search endpoints return fuzzy matches.  The AniList ID is the
+    strongest identity signal; franchise-key matching additionally retains
+    seasons, movies, and specials that legitimately have their own AniList IDs.
+    Provider rows and their order are never rewritten or synthesized.
+    """
+    accepted_ids: set[str] = set()
+    if anime.anilist_id:
+        accepted_ids.add(str(anime.anilist_id))
+    bare_id = anime.id.split(":", 1)[1] if ":" in anime.id else anime.id
+    if bare_id.isdigit():
+        accepted_ids.add(bare_id)
+
+    titles = [value for value in (anime.display_title(), *anime.title.values()) if value]
+    accepted_keys = {franchise_key(value) for value in titles}
+    accepted_keys.update(normalize_title(value) for value in titles)
+
+    kept: list[ProviderAnime] = []
+    for result in results:
+        if result.numeric_id and result.numeric_id in accepted_ids:
+            kept.append(result)
+            continue
+        key = franchise_key(result.title)
+        if key in accepted_keys or normalize_title(result.title) in accepted_keys:
+            kept.append(result)
+    return kept
 
 
 def flatten_franchises(franchises: Sequence[Franchise]) -> list[ProviderAnime]:

@@ -57,7 +57,7 @@ from services.ani_cli import AniCliService
 from services.ani_cli_updater import AniCliUpdateService
 from services.anime_api import AnimeAPI
 from services.dependency_manager import DependencyManager
-from services.franchise import Franchise, group_franchises
+from services.franchise import Franchise, filter_for_anime, group_franchises
 from services.artwork import ArtworkService
 from services.crash_report import CrashReporter
 from services.diagnostics import build_report, export_report
@@ -526,7 +526,13 @@ class AnixoApp(App[None]):
         return anime
 
     async def _provider_results(self, anime: Anime) -> list[Any]:
-        """Resolve exact provider rows using every title AniList supplied."""
+        """Resolve exact provider rows using every title AniList supplied.
+
+        Provider search is fuzzy, so only rows that match the selected AniList
+        identity or its conservative franchise key are offered.  A query that
+        returns only unrelated shows is skipped so a later AniList title can
+        still find the right entry.
+        """
         self.provider.base_url = self.ani_cli.provider_base_url()
         queries: list[str] = []
         for value in (anime.display_title(), *anime.title.values()):
@@ -538,8 +544,9 @@ class AnixoApp(App[None]):
             except ProviderError as error:
                 self.notify_user(str(error))
                 return []
-            if results:
-                return list(results)
+            related = filter_for_anime(results, anime)
+            if related:
+                return related
         return []
 
     def open_season_selector(

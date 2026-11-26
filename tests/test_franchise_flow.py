@@ -20,7 +20,7 @@ from services.ani_cli import (
     AniCliService,
     patch_exact_provider_selection,
 )
-from services.franchise import franchise_key, group_franchises
+from services.franchise import filter_for_anime, franchise_key, group_franchises
 from services.provider import (
     ProviderAnime,
     ProviderEpisode,
@@ -359,3 +359,88 @@ def test_watch_flow_uses_own_selectors_and_exact_provider_id(tmp_path: Path) -> 
             assert get_franchise_selection(app.config, "overlord") is not None
 
     asyncio.run(run())
+
+
+def test_provider_filter_drops_unrelated_fuzzy_matches() -> None:
+    anime = Anime(
+        id="anilist:97940",
+        anilist_id=97940,
+        title=AnimeTitle(english="Black Clover", romaji="Black Clover"),
+    )
+    rows = [
+        ProviderAnime("97940:siteA:34572", "Black Clover", "97940"),
+        ProviderAnime("195604:siteB:61967", "Black Clover Season 2", "195604"),
+        ProviderAnime(
+            "131680:siteC:48585", "Black Clover: Sword of the Wizard King", "131680"
+        ),
+        ProviderAnime("4898:siteD:4898", "Black Butler", "4898"),
+        ProviderAnime("110318:siteE:40031", "Squishy! Black Clover", "110318"),
+    ]
+
+    kept = filter_for_anime(rows, anime)
+
+    assert [row.source_id for row in kept] == [
+        "97940:siteA:34572",
+        "195604:siteB:61967",
+        "131680:siteC:48585",
+    ]
+
+
+def test_provider_filter_accepts_alternate_titles_and_franchise_entries() -> None:
+    anime = Anime(
+        id="126403",
+        anilist_id=126403,
+        title=AnimeTitle(
+            english="Link Click", romaji="Shiguang Dailiren", native="时光代理人"
+        ),
+    )
+    rows = [
+        ProviderAnime("126403:siteA:44074", "Link Click", "126403"),
+        ProviderAnime("136484:siteB:49413", "Link Click Season 2", "136484"),
+        ProviderAnime("136145:siteC:49200", "LINK CLICK Episode 5.5", "136145"),
+        ProviderAnime(
+            "210932:siteD:63957", "Shiguang Dailiren: Xiao Juchang 2", "210932"
+        ),
+        ProviderAnime("999:siteE:999", "Some Other Show", "999"),
+    ]
+
+    kept = filter_for_anime(rows, anime)
+
+    assert [row.source_id for row in kept] == [
+        "126403:siteA:44074",
+        "136484:siteB:49413",
+        "136145:siteC:49200",
+        "210932:siteD:63957",
+    ]
+
+
+def test_provider_results_skip_unrelated_query_and_try_next_title(
+    tmp_path: Path,
+) -> None:
+    app = _test_app(tmp_path)
+    anime = Anime(
+        id="126403",
+        anilist_id=126403,
+        title=AnimeTitle(english="Link Click", romaji="Shiguang Dailiren"),
+    )
+    queries: list[str] = []
+    results: list[Any] = []
+    related = ProviderAnime("126403:siteA:44074", "Link Click", "126403")
+
+    def fake_search(query: str) -> list[ProviderAnime]:
+        queries.append(query)
+        if query == "Link Click":
+            return [ProviderAnime("999:siteE:999", "Some Other Show", "999")]
+        return [related]
+
+    app.provider.search = fake_search  # type: ignore[method-assign]
+
+    async def run() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            results.extend(await app._provider_results(anime))
+
+    asyncio.run(run())
+
+    assert queries == ["Link Click", "Shiguang Dailiren"]
+    assert [row.source_id for row in results] == ["126403:siteA:44074"]
